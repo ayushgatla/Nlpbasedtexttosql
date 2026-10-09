@@ -1,0 +1,27 @@
+# Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.ipynb_checkpoints/
+
+# Backup & Scratch files
+Day3.ipynb.bak
+*.bak
+
+# Large Saved Model Weights (Do not push 1GB weights to GitHub)
+saved_flan_t5_sql/
+best_model/
+*.safetensors
+*.bin
+
+# OS & IDE files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
