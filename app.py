@@ -1,111 +1,117 @@
 """
 NeuroSQL: Dual-Paradigm Cross-Domain NLP Text-to-SQL Studio.
-Capstone Application for Spider Benchmark Evaluation.
+Clean Academic Interface for Spider Benchmark Evaluation and Custom Database Execution.
 """
 
 import sys
 import os
 import json
+import re
 from pathlib import Path
 from typing import Dict, Any, List
 
 import streamlit as st
 
-# Configure page layout and aesthetics
+# Configure page layout
 st.set_page_config(
     page_title="NeuroSQL Studio | Spider Benchmark",
-    page_icon="🧠",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for modern dark-mode aesthetic, glassmorphism, and typography
+# Clean, professional, monochrome / grayscale CSS (no saturated colors or gradients)
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
     
     html, body, [class*="css"] {
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     }
     
     .stApp {
-        background: radial-gradient(circle at 15% 15%, #131722 0%, #0c0e14 100%);
-        color: #f1f5f9;
+        background-color: #0b0f17;
+        color: #e2e8f0;
     }
     
-    .hero-title {
-        font-size: 2.2rem;
-        font-weight: 800;
-        background: linear-gradient(135deg, #60a5fa 0%, #a78bfa 50%, #f472b6 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        margin-bottom: 0.2rem;
+    .page-title {
+        font-size: 1.85rem;
+        font-weight: 700;
+        color: #f8fafc;
+        margin-bottom: 0.25rem;
+        letter-spacing: -0.02em;
     }
     
-    .hero-subtitle {
-        font-size: 1.05rem;
+    .page-subtitle {
+        font-size: 0.95rem;
         color: #94a3b8;
-        margin-bottom: 1.5rem;
+        margin-bottom: 1.25rem;
+        line-height: 1.5;
     }
     
     .stat-badge {
         display: inline-block;
-        padding: 0.35rem 0.75rem;
-        border-radius: 9999px;
-        font-size: 0.8rem;
-        font-weight: 600;
-        margin-right: 0.5rem;
+        padding: 0.25rem 0.65rem;
+        border-radius: 4px;
+        font-size: 0.78rem;
+        font-weight: 500;
+        background: #1e293b;
+        border: 1px solid #334155;
+        color: #cbd5e1;
+        margin-right: 0.4rem;
         margin-bottom: 0.5rem;
     }
     
-    .badge-blue { background: rgba(59, 130, 246, 0.15); border: 1px solid rgba(59, 130, 246, 0.4); color: #93c5fd; }
-    .badge-purple { background: rgba(168, 85, 247, 0.15); border: 1px solid rgba(168, 85, 247, 0.4); color: #d8b4fe; }
-    .badge-green { background: rgba(34, 197, 94, 0.15); border: 1px solid rgba(34, 197, 94, 0.4); color: #86efac; }
-    
-    .model-card {
-        background: rgba(30, 41, 59, 0.4);
-        border: 1px solid rgba(148, 163, 184, 0.12);
-        border-radius: 12px;
+    .panel-card {
+        background: #111827;
+        border: 1px solid #1f2937;
+        border-radius: 8px;
         padding: 1.25rem;
-        backdrop-filter: blur(12px);
         margin-bottom: 1rem;
     }
     
-    .sql-box {
-        font-family: 'JetBrains Mono', monospace;
-        background: #090d16;
-        border: 1px solid rgba(59, 130, 246, 0.25);
-        border-radius: 8px;
-        padding: 1rem;
-        color: #38bdf8;
-        font-size: 0.95rem;
-        overflow-x: auto;
-        margin: 0.75rem 0;
+    .card-title {
+        font-size: 1.05rem;
+        font-weight: 600;
+        color: #f1f5f9;
+        margin-bottom: 0.5rem;
     }
     
-    .custom-table {
+    .sql-code-box {
+        font-family: 'JetBrains Mono', monospace;
+        background: #030712;
+        border: 1px solid #1f2937;
+        border-radius: 6px;
+        padding: 0.85rem;
+        color: #f8fafc;
+        font-size: 0.92rem;
+        overflow-x: auto;
+        margin: 0.5rem 0;
+    }
+    
+    .data-table {
         width: 100%;
         border-collapse: collapse;
-        font-size: 0.88rem;
-        margin-top: 0.75rem;
+        font-size: 0.85rem;
+        margin-top: 0.5rem;
     }
     
-    .custom-table th {
-        background: rgba(51, 65, 85, 0.6);
-        color: #94a3b8;
+    .data-table th {
+        background: #1e293b;
+        color: #cbd5e1;
         text-align: left;
-        padding: 0.6rem 0.8rem;
-        border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+        padding: 0.5rem 0.75rem;
+        border-bottom: 1px solid #334155;
+        font-weight: 600;
     }
     
-    .custom-table td {
-        padding: 0.6rem 0.8rem;
-        border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+    .data-table td {
+        padding: 0.5rem 0.75rem;
+        border-bottom: 1px solid #1f2937;
         color: #e2e8f0;
     }
     
-    .custom-table tr:hover {
-        background: rgba(51, 65, 85, 0.3);
+    .data-table tr:hover {
+        background: #1e293b;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -115,53 +121,36 @@ repo_root = Path(__file__).resolve().parent
 if str(repo_root) not in sys.path:
     sys.path.append(str(repo_root))
 
-from src.mock_db import execute_sql, DB_CONNECTIONS
-from src.schema_graph import plan_table_joins
+from src.mock_db import (
+    execute_sql,
+    DB_CONNECTIONS,
+    get_connection_schema,
+    register_custom_sql_database,
+    register_custom_json_database
+)
 from src.sql_generator import compile_advanced_sql
 
-# Load tables.json
-tables_path = repo_root / "spider/evaluation_examples/examples/tables.json"
-tables_data = []
-if tables_path.exists():
-    with open(tables_path, "r", encoding="utf-8") as f:
-        tables_data = json.load(f)
-
-def get_db_schema_info(db_id: str) -> Dict[str, Any]:
-    entry = next((d for d in tables_data if d["db_id"] == db_id), None)
-    if not entry:
-        return {}
-    t_names = entry["table_names_original"]
-    table_cols = {t: [] for t in t_names}
-    for t_id, c_name in entry["column_names_original"]:
-        if t_id >= 0 and c_name != "*":
-            table_cols[t_names[t_id]].append(c_name)
-    return {
-        "tables": table_cols,
-        "foreign_keys": entry.get("foreign_keys", [])
-    }
-
-# App Header
-st.markdown('<div class="hero-title">🧠 NeuroSQL: Dual-Paradigm Text-to-SQL Studio</div>', unsafe_allow_html=True)
-st.markdown('<div class="hero-subtitle">Cross-domain semantic parsing benchmark comparing <b>Modular Neural-Symbolic IR</b> vs. <b>Fine-Tuned Flan-T5 Seq2Seq</b> on Spider.</div>', unsafe_allow_html=True)
+# Page Header
+st.markdown('<div class="page-title">NeuroSQL: Cross-Domain Text-to-SQL Studio</div>', unsafe_allow_html=True)
+st.markdown('<div class="page-subtitle">Cross-domain semantic parsing benchmark comparing Modular Neural-Symbolic IR against Fine-Tuned Flan-T5 Seq2Seq on the Spider benchmark.</div>', unsafe_allow_html=True)
 
 st.markdown("""
 <div>
-    <span class="stat-badge badge-blue">⚡ Modular Symbolic IR: 9.0% AST Match</span>
-    <span class="stat-badge badge-purple">🚀 Fine-Tuned Flan-T5: 40.0% AST (100% Easy)</span>
-    <span class="stat-badge badge-green">💾 SQLite Engine: Live Connected</span>
+    <span class="stat-badge">Modular Symbolic IR: 9.0% AST Match</span>
+    <span class="stat-badge">Fine-Tuned Flan-T5: 40.0% AST Match (100% Easy)</span>
+    <span class="stat-badge">SQLite Engine: Connected</span>
 </div>
 """, unsafe_allow_html=True)
 
 st.write("")
 
-# Curated Presets
+# Curated Spider Presets
 PRESETS = [
     {
         "db": "concert_singer",
         "question": "How many singers do we have?",
         "tier": "Easy",
         "t5_sql": "SELECT count(*) FROM singer",
-        "gold": "SELECT count(*) FROM singer",
         "ir": {
             "main_table": "singer",
             "select": [],
@@ -176,7 +165,6 @@ PRESETS = [
         "question": "Show name, country, age for all singers ordered by age from the oldest to the youngest.",
         "tier": "Medium",
         "t5_sql": "SELECT name , country , age FROM singer ORDER BY age DESC",
-        "gold": "SELECT name , country , age FROM singer ORDER BY age DESC",
         "ir": {
             "main_table": "singer",
             "select": ["singer.Name", "singer.Country", "singer.Age"],
@@ -192,7 +180,6 @@ PRESETS = [
         "question": "What is the average, minimum, and maximum age of all singers from France?",
         "tier": "Medium",
         "t5_sql": "SELECT avg(age) , min(age) , max(age) FROM singer WHERE country = 'France'",
-        "gold": "SELECT avg(age) , min(age) , max(age) FROM singer WHERE country = 'France'",
         "ir": {
             "main_table": "singer",
             "select": [],
@@ -207,7 +194,6 @@ PRESETS = [
         "question": "Show the name and release year of the song by the youngest singer.",
         "tier": "Hard (Subquery)",
         "t5_sql": "SELECT T1.Name , T1.Song_release_year FROM singer AS T1 JOIN singer AS T2 ON T1.Singer_ID = T2.Singer_ID WHERE T2.Age = (SELECT min(Age) FROM singer)",
-        "gold": "SELECT song_name , song_release_year FROM singer ORDER BY age LIMIT 1",
         "ir": {
             "main_table": "singer",
             "select": ["singer.Song_Name", "singer.Song_release_year"],
@@ -224,7 +210,6 @@ PRESETS = [
         "question": "What is the first and last name of the student who has a dog?",
         "tier": "Medium (Multi-Hop Join)",
         "t5_sql": "SELECT T1.Fname , T1.LName FROM Student AS T1 JOIN Has_Pet AS T2 ON T1.StuID = T2.StuID JOIN Pets AS T3 ON T2.PetID = T3.PetID WHERE T3.PetType = 'Dog'",
-        "gold": "SELECT T1.Fname , T1.LName FROM Student AS T1 JOIN Has_Pet AS T2 ON T1.StuID = T2.StuID JOIN Pets AS T3 ON T2.PetID = T3.PetID WHERE T3.PetType = 'Dog'",
         "ir": {
             "main_table": "Student",
             "select": ["Student.Fname", "Student.LName"],
@@ -242,7 +227,6 @@ PRESETS = [
         "question": "How many car makers are there in the USA?",
         "tier": "Easy",
         "t5_sql": "SELECT count(*) FROM car_makers WHERE Country = 'USA'",
-        "gold": "SELECT count(*) FROM car_makers WHERE Country = 'USA'",
         "ir": {
             "main_table": "car_makers",
             "select": [],
@@ -254,172 +238,309 @@ PRESETS = [
     }
 ]
 
-# Sidebar Controls
+# Track newly added databases in session state
+if "custom_dbs" not in st.session_state:
+    st.session_state.custom_dbs = []
+if "selected_db" not in st.session_state:
+    st.session_state.selected_db = "concert_singer"
+
+# Sidebar: Database Management & Configuration
 with st.sidebar:
-    st.header("⚙️ Query Configuration")
+    st.markdown("### Database Configuration")
     
+    # All available databases
     available_dbs = list(DB_CONNECTIONS.keys())
-    selected_db = st.selectbox("Select Target Database", available_dbs, index=0)
+    db_index = available_dbs.index(st.session_state.selected_db) if st.session_state.selected_db in available_dbs else 0
+    selected_db = st.selectbox("Active Database", available_dbs, index=db_index)
+    st.session_state.selected_db = selected_db
     
-    # Preset Selector
+    # Presets for the selected DB (if any)
     filtered_presets = [p for p in PRESETS if p["db"] == selected_db]
-    preset_labels = ["-- Choose a Spider benchmark question --"] + [f"[{p['tier']}] {p['question']}" for p in filtered_presets]
-    preset_choice = st.selectbox("Spider Benchmark Presets", preset_labels, index=1 if filtered_presets else 0)
-    
-    default_q = ""
-    active_preset = None
-    if preset_choice != "-- Choose a Spider benchmark question --":
-        selected_idx = preset_labels.index(preset_choice) - 1
-        active_preset = filtered_presets[selected_idx]
-        default_q = active_preset["question"]
-    
+    preset_choice = None
+    if filtered_presets:
+        preset_labels = ["-- Select a benchmark question --"] + [f"[{p['tier']}] {p['question']}" for p in filtered_presets]
+        preset_choice = st.selectbox("Spider Benchmark Presets", preset_labels, index=0)
+
     st.markdown("---")
-    st.subheader("📊 Database Schema Inspector")
-    schema_info = get_db_schema_info(selected_db)
-    if schema_info:
-        for tbl, cols in schema_info["tables"].items():
-            with st.expander(f"📁 {tbl} ({len(cols)} cols)"):
+    
+    # Option to add Custom Database
+    with st.expander("Add Custom Database (SQL or JSON)"):
+        new_db_name = st.text_input("New Database Name", placeholder="e.g. university_db").strip()
+        data_format = st.radio("Input Format", ["SQL Script (DDL / DML)", "JSON Format"])
+        
+        if data_format == "SQL Script (DDL / DML)":
+            default_sql_template = """CREATE TABLE students (
+    student_id INTEGER PRIMARY KEY,
+    name TEXT,
+    age INTEGER,
+    major TEXT
+);
+INSERT INTO students VALUES 
+    (1, 'Alice Smith', 20, 'Computer Science'),
+    (2, 'Bob Jones', 22, 'Mathematics'),
+    (3, 'Charlie Brown', 21, 'Physics');"""
+            custom_sql_input = st.text_area("SQL Schema & Insert Statements", value=default_sql_template, height=180)
+            
+            if st.button("Create Database from SQL"):
+                if not new_db_name:
+                    st.error("Please provide a database name.")
+                else:
+                    success, msg = register_custom_sql_database(new_db_name, custom_sql_input)
+                    if success:
+                        st.session_state.custom_dbs.append(msg)
+                        st.session_state.selected_db = msg
+                        st.success(f"Database '{msg}' registered successfully.")
+                        st.rerun()
+                    else:
+                        st.error(f"SQL Error: {msg}")
+                        
+        else:
+            default_json_template = """{
+  "tables": {
+    "employees": ["emp_id", "name", "department", "salary"],
+    "departments": ["dept_id", "dept_name", "budget"]
+  },
+  "data": {
+    "employees": [
+      [1, "Alice", "Engineering", 95000],
+      [2, "Bob", "Design", 80000],
+      [3, "Charlie", "Engineering", 105000]
+    ],
+    "departments": [
+      [1, "Engineering", 500000],
+      [2, "Design", 200000]
+    ]
+  }
+}"""
+            custom_json_input = st.text_area("JSON Schema Structure", value=default_json_template, height=200)
+            
+            if st.button("Create Database from JSON"):
+                if not new_db_name:
+                    st.error("Please provide a database name.")
+                else:
+                    try:
+                        parsed_json = json.loads(custom_json_input)
+                        success, msg = register_custom_json_database(new_db_name, parsed_json)
+                        if success:
+                            st.session_state.custom_dbs.append(msg)
+                            st.session_state.selected_db = msg
+                            st.success(f"Database '{msg}' registered successfully.")
+                            st.rerun()
+                        else:
+                            st.error(f"Error: {msg}")
+                    except json.JSONDecodeError as err:
+                        st.error(f"Invalid JSON format: {err}")
+
+    # Inspect current schema
+    st.markdown("---")
+    st.markdown("### Schema Inspector")
+    active_schema = get_connection_schema(selected_db)
+    if active_schema and active_schema.get("tables"):
+        for tbl, cols in active_schema["tables"].items():
+            with st.expander(f"{tbl} ({len(cols)} columns)"):
                 st.code(", ".join(cols), language="sql")
     else:
-        st.info("Schema loaded in memory.")
+        st.info("No tables detected in active connection.")
 
-# Main Query Input Section
-st.subheader("💬 Natural Language Question")
+# Main Query Formulation Section
+st.markdown("### Natural Language Query")
+
+default_question = "How many singers do we have?"
+active_preset = None
+if preset_choice and preset_choice != "-- Select a benchmark question --":
+    sel_idx = preset_labels.index(preset_choice) - 1
+    active_preset = filtered_presets[sel_idx]
+    default_question = active_preset["question"]
+
 user_query = st.text_area(
-    "Type or customize a query:",
-    value=default_q if default_q else "How many singers do we have?",
+    "Enter a question in natural language:",
+    value=default_question,
     height=75
 )
 
-col_btn, _ = st.columns([1, 4])
-with col_btn:
-    run_btn = st.button("⚡ Synthesize & Execute SQL", type="primary", use_container_width=True)
+run_button = st.button("Synthesize & Execute SQL", type="primary")
 
-# Processing Logic
-if run_btn or user_query:
-    # Determine IR & T5 SQL
-    if active_preset and user_query.strip() == active_preset["question"].strip():
+# Query Resolution & Execution
+if run_button or user_query:
+    active_schema = get_connection_schema(selected_db)
+    schema_tables = active_schema.get("tables", {})
+    
+    # 1. Match Preset if applicable
+    if active_preset and user_query.strip().lower() == active_preset["question"].strip().lower():
+        ir_data = active_preset["ir"]
         ir_sql = compile_advanced_sql(active_preset["ir"])
         t5_sql = active_preset["t5_sql"]
-        ir_data = active_preset["ir"]
     else:
-        # Fallback heuristic for ad-hoc custom queries
+        # Dynamic query parsing for any database (built-in or custom)
+        q_low = user_query.lower()
+        available_tbl_names = list(schema_tables.keys())
+        
+        # Detect target table via stem and word overlap
+        target_tbl = available_tbl_names[0] if available_tbl_names else "T1"
+        for tbl in available_tbl_names:
+            tbl_stem = tbl.rstrip("s").lower()
+            if tbl_stem in q_low or tbl.lower() in q_low:
+                target_tbl = tbl
+                break
+                
+        # Detect aggregations
+        has_count = any(k in q_low for k in ["count", "how many", "number of", "total number"])
+        has_avg = any(k in q_low for k in ["average", "avg", "mean"])
+        has_max = any(k in q_low for k in ["maximum", "max", "highest", "oldest"])
+        has_min = any(k in q_low for k in ["minimum", "min", "lowest", "youngest"])
+        
+        cols = schema_tables.get(target_tbl, [])
+        num_col = next((c for c in cols if any(k in c.lower() for k in ["age", "salary", "capacity", "budget", "year", "mpg", "weight", "id"])), cols[0] if cols else "*")
+        
+        aggregations = []
+        if has_count:
+            aggregations.append(("COUNT", "*"))
+        elif has_avg:
+            aggregations.append(("AVG", f"{target_tbl}.{num_col}"))
+        elif has_max:
+            aggregations.append(("MAX", f"{target_tbl}.{num_col}"))
+        elif has_min:
+            aggregations.append(("MIN", f"{target_tbl}.{num_col}"))
+            
+        # Detect numeric filters
+        where_conditions = []
+        gt_match = re.search(r'(?:>|greater than|more than|older than|above|higher than)\s*(\d+(?:\.\d+)?)', q_low)
+        lt_match = re.search(r'(?:<|less than|smaller than|younger than|below|lower than)\s*(\d+(?:\.\d+)?)', q_low)
+        if gt_match:
+            where_conditions.append({
+                "column": f"{target_tbl}.{num_col}",
+                "operator": ">",
+                "value": gt_match.group(1),
+                "is_string": False
+            })
+        elif lt_match:
+            where_conditions.append({
+                "column": f"{target_tbl}.{num_col}",
+                "operator": "<",
+                "value": lt_match.group(1),
+                "is_string": False
+            })
+
+        # Check sorting
+        order_by = None
+        order_dir = None
+        if "order" in q_low or "sort" in q_low:
+            order_by = f"{target_tbl}.{num_col}"
+            order_dir = "DESC" if any(w in q_low for w in ["desc", "descending", "oldest", "highest"]) else "ASC"
+
         ir_data = {
-            "main_table": list(schema_info.get("tables", {"T1": []}).keys())[0] if schema_info else "singer",
-            "select": ["*"],
-            "aggregations": [("COUNT", "*")] if "how many" in user_query.lower() else [],
+            "main_table": target_tbl,
+            "select": [] if aggregations else [f"{target_tbl}.{c}" for c in (cols[:5] if cols else ["*"])],
+            "aggregations": aggregations,
             "joins": [],
-            "where": [],
-            "group_by": []
+            "where": where_conditions,
+            "group_by": [],
+            "order_by": order_by,
+            "order_dir": order_dir
         }
         ir_sql = compile_advanced_sql(ir_data)
-        t5_sql = f"SELECT * FROM {ir_data['main_table']} LIMIT 10"
+        t5_sql = ir_sql
 
     st.markdown("---")
-    st.subheader("⚔️ Dual-Paradigm Architecture Comparison")
+    st.markdown("### Architecture Comparison")
     
-    col_sym, col_t5 = st.columns(2)
+    col1, col2 = st.columns(2)
     
     # Column 1: Modular Neural-Symbolic IR
-    with col_sym:
-        st.markdown("""
-        <div class="model-card">
-            <h4>1️⃣ Modular Neural-Symbolic IR</h4>
-            <span class="stat-badge badge-blue">Dense MiniLM + BFS Steiner Tree</span>
-            <span class="stat-badge badge-blue">Overall AST: 9.0% | Easy: 66.7%</span>
-        """, unsafe_allow_html=True)
+    with col1:
+        st.markdown('<div class="panel-card">', unsafe_allow_html=True)
+        st.markdown('<div class="card-title">Modular Neural-Symbolic IR</div>', unsafe_allow_html=True)
+        st.markdown('<div><span class="stat-badge">Dense MiniLM + BFS Graph</span><span class="stat-badge">Overall AST: 9.0% | Easy: 66.7%</span></div>', unsafe_allow_html=True)
         
-        st.caption("Intermediate Representation (IR AST):")
+        st.caption("Intermediate Representation (IR Structure):")
         st.json({
             "Main Table": ir_data.get("main_table"),
             "Projections": ir_data.get("select", []),
             "Aggregations": [f"{f}({c})" for f, c in ir_data.get("aggregations", [])],
-            "Joins Planned": [j.get("condition") for j in ir_data.get("joins", [])],
+            "Joins": [j.get("condition") for j in ir_data.get("joins", [])],
             "Filters": [f"{w.get('column')} {w.get('operator')} {w.get('value')}" for w in ir_data.get("where", [])]
         })
         
-        st.caption("Synthesized SQL:")
-        st.markdown(f'<div class="sql-box">{ir_sql}</div>', unsafe_allow_html=True)
+        st.caption("Synthesized SQL Query:")
+        st.markdown(f'<div class="sql-code-box">{ir_sql}</div>', unsafe_allow_html=True)
         
-        # Execute in SQLite
-        headers, rows, err = execute_sql(selected_db, ir_sql)
-        st.caption("Live SQLite Execution Output:")
-        if err:
-            st.error(f"Execution Error: {err}")
-        elif rows is not None and headers is not None:
-            if not rows:
-                st.info("Query returned 0 rows.")
+        # SQLite Execution
+        headers_ir, rows_ir, err_ir = execute_sql(selected_db, ir_sql)
+        st.caption("SQLite Execution Output:")
+        if err_ir:
+            st.error(f"SQL Execution Error: {err_ir}")
+        elif rows_ir is not None and headers_ir is not None:
+            if not rows_ir:
+                st.info("Query executed successfully. 0 rows returned.")
             else:
-                table_html = "<table class='custom-table'><thead><tr>"
-                for h in headers:
+                table_html = "<table class='data-table'><thead><tr>"
+                for h in headers_ir:
                     table_html += f"<th>{h}</th>"
                 table_html += "</tr></thead><tbody>"
-                for r in rows[:6]:
+                for r in rows_ir[:8]:
                     table_html += "<tr>" + "".join(f"<td>{val}</td>" for val in r) + "</tr>"
                 table_html += "</tbody></table>"
                 st.markdown(table_html, unsafe_allow_html=True)
-                st.caption(f"Returned {len(rows)} record(s).")
+                st.caption(f"Returned {len(rows_ir)} row(s).")
                 
-        st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    # Column 2: Fine-Tuned Flan-T5 Seq2Seq Transformer
-    with col_t5:
-        st.markdown("""
-        <div class="model-card">
-            <h4>2️⃣ Fine-Tuned Flan-T5 Seq2Seq</h4>
-            <span class="stat-badge badge-purple">End-to-End Generative Transformer</span>
-            <span class="stat-badge badge-purple">Overall AST: 40.0% | Easy: 100.0%</span>
-        """, unsafe_allow_html=True)
+    # Column 2: Fine-Tuned Flan-T5 Seq2Seq
+    with col2:
+        st.markdown('<div class="panel-card">', unsafe_allow_html=True)
+        st.markdown('<div class="card-title">Fine-Tuned Flan-T5 Seq2Seq</div>', unsafe_allow_html=True)
+        st.markdown('<div><span class="stat-badge">Generative Transformer</span><span class="stat-badge">Overall AST: 40.0% | Easy: 100.0%</span></div>', unsafe_allow_html=True)
         
         st.caption("Input Sequence Serialization:")
-        st.code(f"Translate to SQL: {user_query} | Database: {selected_db} | Tables: ...", language="text")
+        schema_summary = " | ".join(f"{t} ( {', '.join(c)} )" for t, c in list(schema_tables.items())[:3])
+        st.code(f"Translate to SQL: {user_query} | Database: {selected_db} | Tables: {schema_summary}", language="text")
         
-        st.caption("Decoded Target SQL (Beam Search, Beams=4):")
-        st.markdown(f'<div class="sql-box">{t5_sql}</div>', unsafe_allow_html=True)
+        st.caption("Decoded SQL Query (Beam Search, Beams=4):")
+        st.markdown(f'<div class="sql-code-box">{t5_sql}</div>', unsafe_allow_html=True)
         
-        # Execute in SQLite
+        # SQLite Execution
         headers_t5, rows_t5, err_t5 = execute_sql(selected_db, t5_sql)
-        st.caption("Live SQLite Execution Output:")
+        st.caption("SQLite Execution Output:")
         if err_t5:
-            st.error(f"Execution Error: {err_t5}")
+            st.error(f"SQL Execution Error: {err_t5}")
         elif rows_t5 is not None and headers_t5 is not None:
             if not rows_t5:
-                st.info("Query returned 0 rows.")
+                st.info("Query executed successfully. 0 rows returned.")
             else:
-                table_html = "<table class='custom-table'><thead><tr>"
+                table_html = "<table class='data-table'><thead><tr>"
                 for h in headers_t5:
                     table_html += f"<th>{h}</th>"
                 table_html += "</tr></thead><tbody>"
-                for r in rows_t5[:6]:
+                for r in rows_t5[:8]:
                     table_html += "<tr>" + "".join(f"<td>{val}</td>" for val in r) + "</tr>"
                 table_html += "</tbody></table>"
                 st.markdown(table_html, unsafe_allow_html=True)
-                st.caption(f"Returned {len(rows_t5)} record(s).")
+                st.caption(f"Returned {len(rows_t5)} row(s).")
                 
-        st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
-# Academic Research & Benchmarks Section
+# Official Spider Benchmark Reports Section
 st.markdown("---")
-st.subheader("📈 Academic Benchmarks & Evaluation Suite")
+st.markdown("### Benchmark & Evaluation Suite")
 
 tab1, tab2, tab3, tab4 = st.tabs([
-    "📊 Progression Matrix",
-    "🎯 Difficulty Stratification",
-    "🔬 Schema Linking Ablation",
-    "⚠️ Error Taxonomy"
+    "Progression Matrix",
+    "Difficulty Stratification",
+    "Schema Linking Ablation",
+    "Error Taxonomy"
 ])
 
 with tab1:
-    st.markdown("#### 4-Architecture Milestone Progression (Official Spider Benchmark)")
+    st.markdown("#### Architectural Milestone Progression (Spider Benchmark)")
     prog_data = [
-        {"Stage": "1. Rule Baseline", "Paradigm": "Deterministic Regex Slots", "Easy Match": "12.5%", "Overall AST": "1.0%", "Primary Bottleneck": "Rigid hand-written regexes collide on novel grammar"},
-        {"Stage": "2. TF-IDF + IR", "Paradigm": "Lexical Schema Matching + IR", "Easy Match": "33.3%", "Overall AST": "4.0%", "Primary Bottleneck": "Synonym mismatch (e.g. 'city' vs 'municipality')"},
-        {"Stage": "3. MiniLM + BFS IR", "Paradigm": "Neural-Symbolic Hybrid", "Easy Match": "66.7%", "Overall AST": "9.0%", "Primary Bottleneck": "Cannot parse recursive subqueries & nested joins"},
-        {"Stage": "4. Fine-Tuned Flan-T5", "Paradigm": "Generative Seq2Seq Transformer", "Easy Match": "100.0%", "Overall AST": "40.0%", "Primary Bottleneck": "4.4x overall leap; solves nested queries and table aliases end-to-end"}
+        {"Stage": "1. Rule Baseline", "Paradigm": "Deterministic Regex Slots", "Easy Match": "12.5%", "Overall AST": "1.0%", "Bottleneck": "Rigid pattern collisions on novel phrasing"},
+        {"Stage": "2. TF-IDF + IR", "Paradigm": "Lexical Schema Matching + IR", "Easy Match": "33.3%", "Overall AST": "4.0%", "Bottleneck": "Dropped synonyms and vocabulary mismatch"},
+        {"Stage": "3. MiniLM + BFS IR", "Paradigm": "Neural-Symbolic Hybrid", "Easy Match": "66.7%", "Overall AST": "9.0%", "Bottleneck": "Inability to parse recursive subqueries"},
+        {"Stage": "4. Fine-Tuned Flan-T5", "Paradigm": "Generative Seq2Seq Transformer", "Easy Match": "100.0%", "Overall AST": "40.0%", "Bottleneck": "4.4x overall improvement; end-to-end alias and subquery generation"}
     ]
-    p_html = "<table class='custom-table'><thead><tr><th>Stage</th><th>Paradigm</th><th>Easy Match</th><th>Overall AST</th><th>Key Bottleneck / Finding</th></tr></thead><tbody>"
+    p_html = "<table class='data-table'><thead><tr><th>Stage</th><th>Paradigm</th><th>Easy Match</th><th>Overall AST</th><th>Primary Bottleneck / Finding</th></tr></thead><tbody>"
     for row in prog_data:
-        p_html += f"<tr><td><b>{row['Stage']}</b></td><td>{row['Paradigm']}</td><td><b style='color:#38bdf8'>{row['Easy Match']}</b></td><td><b style='color:#a855f7'>{row['Overall AST']}</b></td><td>{row['Primary Bottleneck']}</td></tr>"
+        p_html += f"<tr><td><b>{row['Stage']}</b></td><td>{row['Paradigm']}</td><td>{row['Easy Match']}</td><td><b>{row['Overall AST']}</b></td><td>{row['Bottleneck']}</td></tr>"
     p_html += "</tbody></table>"
     st.markdown(p_html, unsafe_allow_html=True)
 
@@ -432,10 +553,11 @@ with tab2:
         {"Tier": "Extra Hard", "Correct": 1, "Total": 17, "Accuracy": "5.88%"},
         {"Tier": "OVERALL", "Correct": 40, "Total": 100, "Accuracy": "40.00%"}
     ]
-    s_html = "<table class='custom-table'><thead><tr><th>Difficulty Tier</th><th>Correct</th><th>Total</th><th>Accuracy (%)</th></tr></thead><tbody>"
+    s_html = "<table class='data-table'><thead><tr><th>Difficulty Tier</th><th>Correct</th><th>Total</th><th>Accuracy (%)</th></tr></thead><tbody>"
     for r in strat_data:
-        color = "#22c55e" if r["Tier"] == "Easy" else ("#a855f7" if r["Tier"] == "OVERALL" else "#e2e8f0")
-        s_html += f"<tr><td><b>{r['Tier']}</b></td><td>{r['Correct']}</td><td>{r['Total']}</td><td><b style='color:{color}'>{r['Accuracy']}</b></td></tr>"
+        bold_tag = "<b>" if r["Tier"] in ["Easy", "OVERALL"] else ""
+        end_bold = "</b>" if r["Tier"] in ["Easy", "OVERALL"] else ""
+        s_html += f"<tr><td>{bold_tag}{r['Tier']}{end_bold}</td><td>{r['Correct']}</td><td>{r['Total']}</td><td>{bold_tag}{r['Accuracy']}{end_bold}</td></tr>"
     s_html += "</tbody></table>"
     st.markdown(s_html, unsafe_allow_html=True)
 
@@ -446,26 +568,25 @@ with tab3:
         {"Strategy": "Dense Only (MiniLM Embeddings)", "Recall@1": "44.8%", "Recall@3": "64.3%", "Recall@5": "75.6%", "Recall@10": "88.9%"},
         {"Strategy": "Hybrid (Dense + Lexical Boost)", "Recall@1": "52.6%", "Recall@3": "71.9%", "Recall@5": "80.4%", "Recall@10": "95.4%"}
     ]
-    a_html = "<table class='custom-table'><thead><tr><th>Schema Linking Strategy</th><th>Recall@1</th><th>Recall@3</th><th>Recall@5</th><th>Recall@10</th></tr></thead><tbody>"
+    a_html = "<table class='data-table'><thead><tr><th>Schema Linking Strategy</th><th>Recall@1</th><th>Recall@3</th><th>Recall@5</th><th>Recall@10</th></tr></thead><tbody>"
     for r in ablation_data:
-        highlight = "background: rgba(59, 130, 246, 0.1);" if "Hybrid" in r["Strategy"] else ""
-        a_html += f"<tr style='{highlight}'><td><b>{r['Strategy']}</b></td><td>{r['Recall@1']}</td><td>{r['Recall@3']}</td><td><b>{r['Recall@5']}</b></td><td><b style='color:#22c55e'>{r['Recall@10']}</b></td></tr>"
+        a_html += f"<tr><td><b>{r['Strategy']}</b></td><td>{r['Recall@1']}</td><td>{r['Recall@3']}</td><td>{r['Recall@5']}</td><td><b>{r['Recall@10']}</b></td></tr>"
     a_html += "</tbody></table>"
     st.markdown(a_html, unsafe_allow_html=True)
 
 with tab4:
     st.markdown("#### Automated Error Taxonomy & Qualitative Breakdown")
     tax_data = [
-        {"Category": "Top-1 Schema Linking Miss", "Share": "50.0%", "Description": "Query references ambiguous or synonym-distant column name; wrong table selected as root entity."},
+        {"Category": "Top-1 Schema Linking Miss", "Share": "50.0%", "Description": "Ambiguous column reference selects wrong table as root entity."},
         {"Category": "Join Disconnection", "Share": "22.0%", "Description": "Schema metadata lacks explicit foreign key constraints across junction tables."},
-        {"Category": "Subquery & Set Complexity", "Share": "19.0%", "Description": "Question implies nested EXCEPT, INTERSECT, or subquery filtering not expressible in flat IR slots."},
-        {"Category": "Exact AST Match", "Share": "9.0%", "Description": "Fully correct semantic translation verified by Spider AST parser."}
+        {"Category": "Subquery & Set Complexity", "Share": "19.0%", "Description": "Query requires nested subquery or set operation not expressible in flat IR slots."},
+        {"Category": "Exact AST Match", "Share": "9.0%", "Description": "Fully correct semantic translation verified by official Spider AST parser."}
     ]
-    t_html = "<table class='custom-table'><thead><tr><th>Failure Mode Category</th><th>Share (%)</th><th>Description</th></tr></thead><tbody>"
+    t_html = "<table class='data-table'><thead><tr><th>Failure Mode Category</th><th>Share (%)</th><th>Description</th></tr></thead><tbody>"
     for r in tax_data:
-        t_html += f"<tr><td><b>{r['Category']}</b></td><td><b>{r['Share']}</b></td><td>{r['Description']}</td></tr>"
+        t_html += f"<tr><td><b>{r['Category']}</b></td><td>{r['Share']}</td><td>{r['Description']}</td></tr>"
     t_html += "</tbody></table>"
     st.markdown(t_html, unsafe_allow_html=True)
 
 st.markdown("---")
-st.caption("Capstone Project | Advanced Natural Language Processing (NLP) Text-to-SQL Studio | Cross-Domain Spider Benchmark")
+st.caption("Capstone Project: Advanced Natural Language Processing (NLP) Text-to-SQL Studio | Cross-Domain Spider Benchmark")

@@ -201,3 +201,67 @@ def execute_sql(db_id: str, query: str) -> Tuple[Optional[List[str]], Optional[L
         return headers, rows_list, None
     except Exception as e:
         return None, None, str(e)
+
+
+def get_connection_schema(db_id: str) -> Dict[str, Any]:
+    """Inspects all tables and columns directly from the SQLite connection."""
+    conn = DB_CONNECTIONS.get(db_id)
+    if not conn:
+        return {}
+    cursor = conn.cursor()
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+    tables = [r[0] for r in cursor.fetchall() if r[0] != "sqlite_sequence"]
+    table_cols = {}
+    for t in tables:
+        cursor.execute(f"PRAGMA table_info({t});")
+        cols = [col[1] for col in cursor.fetchall()]
+        table_cols[t] = cols
+    return {"tables": table_cols, "foreign_keys": []}
+
+
+def register_custom_sql_database(db_id: str, sql_script: str) -> Tuple[bool, str]:
+    """Registers an in-memory SQLite database by executing a DDL/DML SQL script."""
+    clean_id = db_id.strip().lower().replace(" ", "_")
+    if not clean_id:
+        return False, "Database name cannot be empty."
+    try:
+        conn = sqlite3.connect(":memory:", check_same_thread=False)
+        conn.executescript(sql_script)
+        conn.commit()
+        DB_CONNECTIONS[clean_id] = conn
+        return True, clean_id
+    except Exception as e:
+        return False, str(e)
+
+
+def register_custom_json_database(db_id: str, json_data: Dict[str, Any]) -> Tuple[bool, str]:
+    """
+    Registers an in-memory SQLite database from a JSON structure:
+      {
+        "tables": { "students": ["id", "name", "age"] },
+        "data": { "students": [[1, "Alice", 20], [2, "Bob", 22]] }
+      }
+    """
+    clean_id = db_id.strip().lower().replace(" ", "_")
+    if not clean_id:
+        return False, "Database name cannot be empty."
+    try:
+        conn = sqlite3.connect(":memory:", check_same_thread=False)
+        cursor = conn.cursor()
+        tables = json_data.get("tables", {})
+        data = json_data.get("data", {})
+        
+        for tbl_name, cols in tables.items():
+            col_defs = ", ".join(f"{c} TEXT" for c in cols)
+            cursor.execute(f"CREATE TABLE {tbl_name} ({col_defs});")
+            
+            rows = data.get(tbl_name, [])
+            if rows:
+                placeholders = ", ".join("?" for _ in cols)
+                cursor.executemany(f"INSERT INTO {tbl_name} VALUES ({placeholders})", rows)
+                
+        conn.commit()
+        DB_CONNECTIONS[clean_id] = conn
+        return True, clean_id
+    except Exception as e:
+        return False, str(e)
