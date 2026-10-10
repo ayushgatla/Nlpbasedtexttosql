@@ -25,3 +25,6 @@ best_model/
 Thumbs.db
 .vscode/
 .idea/
+test_fp32/
+test_mini_train/
+test_out/
