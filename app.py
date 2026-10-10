@@ -390,7 +390,25 @@ if run_button or user_query:
         has_min = any(k in q_low for k in ["minimum", "min", "lowest", "youngest"])
         
         cols = schema_tables.get(target_tbl, [])
-        num_col = next((c for c in cols if any(k in c.lower() for k in ["age", "salary", "capacity", "budget", "year", "mpg", "weight", "id"])), cols[0] if cols else "*")
+        
+        # 1. First, check if ANY column name in target_tbl is explicitly mentioned in the user query:
+        target_col = None
+        for c in cols:
+            c_norm = c.lower().replace("_", " ")
+            if c.lower() in q_low or c_norm in q_low:
+                target_col = c
+                break
+                
+        # 2. If no column name was mentioned, fall back to meaningful metric columns (avoiding ID columns)
+        if not target_col:
+            non_id_cols = [c for c in cols if "id" not in c.lower()]
+            search_pool = non_id_cols if non_id_cols else cols
+            target_col = next(
+                (c for c in search_pool if any(k in c.lower() for k in ["age", "salary", "gpa", "capacity", "budget", "year", "price", "stock", "mpg", "weight", "score"])),
+                search_pool[0] if search_pool else "*"
+            )
+        
+        num_col = target_col
         
         aggregations = []
         if has_count:
@@ -428,9 +446,16 @@ if run_button or user_query:
             order_by = f"{target_tbl}.{num_col}"
             order_dir = "DESC" if any(w in q_low for w in ["desc", "descending", "oldest", "highest"]) else "ASC"
 
+        # Check if user mentioned specific columns to project
+        user_projected_cols = [c for c in cols if c.lower() in q_low or c.lower().replace("_", " ") in q_low]
+        if user_projected_cols:
+            selected_cols = [f"{target_tbl}.{c}" for c in user_projected_cols]
+        else:
+            selected_cols = [f"{target_tbl}.{c}" for c in (cols[:5] if cols else ["*"])]
+
         ir_data = {
             "main_table": target_tbl,
-            "select": [] if aggregations else [f"{target_tbl}.{c}" for c in (cols[:5] if cols else ["*"])],
+            "select": [] if aggregations else selected_cols,
             "aggregations": aggregations,
             "joins": [],
             "where": where_conditions,
