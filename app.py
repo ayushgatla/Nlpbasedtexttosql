@@ -134,15 +134,37 @@ from src.sql_generator import compile_advanced_sql
 st.markdown('<div class="page-title">NeuroSQL: Cross-Domain Text-to-SQL Studio</div>', unsafe_allow_html=True)
 st.markdown('<div class="page-subtitle">Cross-domain semantic parsing benchmark comparing Modular Neural-Symbolic IR against Fine-Tuned Flan-T5 Seq2Seq on the Spider benchmark.</div>', unsafe_allow_html=True)
 
-st.markdown("""
-<div>
-    <span class="stat-badge">Modular Symbolic IR: 9.0% AST Match</span>
-    <span class="stat-badge">Fine-Tuned Flan-T5: 40.0% AST Match (100% Easy)</span>
-    <span class="stat-badge">SQLite Engine: Connected</span>
-</div>
-""", unsafe_allow_html=True)
+# Model Detection & Caching Helpers
+def find_model_path():
+    candidates = [
+        Path("./saved_flan_t5_sql/best_model"),
+        Path("/content/drive/MyDrive/nlp_project/saved_flan_t5_sql/best_model"),
+        Path("best_model")
+    ]
+    for c in candidates:
+        if c.exists() and (c / "config.json").exists():
+            return str(c)
+    return None
 
-st.write("")
+@st.cache_resource(show_spinner="Loading Fine-Tuned Flan-T5 model weights into memory...")
+def get_transformer_pipeline(model_path: str):
+    from src.transformer_inference import load_transformer_model
+    return load_transformer_model(model_path)
+
+def get_tables_data_for_prompt(db_id: str, schema_tables: Dict[str, List[str]]):
+    entry = next((d for d in tables_data if d.get("db_id") == db_id), None)
+    if entry:
+        return [entry]
+    t_names = list(schema_tables.keys())
+    col_names = [[-1, "*"]]
+    for t_idx, t in enumerate(t_names):
+        for c in schema_tables[t]:
+            col_names.append([t_idx, c])
+    return [{
+        "db_id": db_id,
+        "table_names_original": t_names,
+        "column_names_original": col_names
+    }]
 
 # Curated Spider Presets
 PRESETS = [
@@ -342,6 +364,27 @@ INSERT INTO students VALUES
     else:
         st.info("No tables detected in active connection.")
 
+    # Neural Transformer Model Status
+    st.markdown("---")
+    st.markdown("### Neural Model Status")
+    detected_model_path = find_model_path()
+    if detected_model_path:
+        st.success(f"Model Checkpoint Found: `{detected_model_path}`")
+        load_model_chk = st.checkbox("Enable Live Transformer Inference", value=True)
+        if load_model_chk:
+            try:
+                t5_model, t5_tokenizer, t5_device = get_transformer_pipeline(detected_model_path)
+                st.caption(f"Hardware: {t5_device.upper()}")
+            except Exception as e:
+                st.error(f"Error loading model: {e}")
+                t5_model, t5_tokenizer, t5_device = None, None, "cpu"
+        else:
+            t5_model, t5_tokenizer, t5_device = None, None, "cpu"
+    else:
+        st.info("Checkpoint stored on Google Drive.")
+        st.caption("To run live PyTorch inference locally, download `best_model` to `./saved_flan_t5_sql/best_model` or run Streamlit on Colab.")
+        t5_model, t5_tokenizer, t5_device = None, None, "cpu"
+
 # Main Query Formulation Section
 st.markdown("### Natural Language Query")
 
@@ -464,6 +507,28 @@ if run_button or user_query:
             "order_dir": order_dir
         }
         ir_sql = compile_advanced_sql(ir_data)
+
+    # Generate SQL using Fine-Tuned Flan-T5 Neural Network if loaded in memory
+    if t5_model is not None:
+        try:
+            with st.spinner("Generating SQL using fine-tuned Flan-T5 neural network..."):
+                from src.transformer_inference import predict_sql_transformer
+                t5_tables_data = get_tables_data_for_prompt(selected_db, schema_tables)
+                t5_sql = predict_sql_transformer(
+                    question=user_query,
+                    db_id=selected_db,
+                    tables_list=t5_tables_data,
+                    model=t5_model,
+                    tokenizer=t5_tokenizer,
+                    device=t5_device,
+                    num_beams=4
+                )
+        except Exception as e:
+            st.warning(f"Neural generation fallback: {e}")
+            t5_sql = active_preset["t5_sql"] if (active_preset and user_query.strip().lower() == active_preset["question"].strip().lower()) else ir_sql
+    elif active_preset and user_query.strip().lower() == active_preset["question"].strip().lower():
+        t5_sql = active_preset["t5_sql"]
+    else:
         t5_sql = ir_sql
 
     st.markdown("---")
