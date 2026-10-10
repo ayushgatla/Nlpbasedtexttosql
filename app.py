@@ -130,9 +130,18 @@ from src.mock_db import (
 )
 from src.sql_generator import compile_advanced_sql
 
-# Page Header
-st.markdown('<div class="page-title">NeuroSQL: Cross-Domain Text-to-SQL Studio</div>', unsafe_allow_html=True)
-st.markdown('<div class="page-subtitle">Cross-domain semantic parsing benchmark comparing Modular Neural-Symbolic IR against Fine-Tuned Flan-T5 Seq2Seq on the Spider benchmark.</div>', unsafe_allow_html=True)
+# Load tables.json if available
+tables_path = repo_root / "spider/evaluation_examples/examples/tables.json"
+if not tables_path.exists():
+    tables_path = Path("/content/Nlpbasedtexttosql/spider/evaluation_examples/examples/tables.json")
+
+tables_data = []
+if tables_path.exists():
+    try:
+        with open(tables_path, "r", encoding="utf-8") as f:
+            tables_data = json.load(f)
+    except Exception:
+        tables_data = []
 
 # Model Detection & Caching Helpers
 def find_model_path():
