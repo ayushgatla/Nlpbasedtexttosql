@@ -59,12 +59,16 @@ else:
 
 #### Option A: Cloudflare Tunnel (Recommended — No Passwords, Fast & Stable)
 ```bash
-# 1. Install Cloudflare tunnel daemon
+# 1. Pull the latest code fix
+!git pull
+
+# 2. Install Cloudflare Tunnel
 !wget -q -nc https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
 !dpkg -i cloudflared-linux-amd64.deb
 
-# 2. Launch Streamlit and tunnel
+# 3. Launch Streamlit with CORS flags & Cloudflare tunnel
 !streamlit run app.py --server.port 8501 --server.enableCORS false --server.enableXsrfProtection false & cloudflared tunnel --url http://localhost:8501
+
 ```
 *(Click the `https://xxxx.trycloudflare.com` URL printed in the output to open the live studio!)*
 
