@@ -1,0 +1,17 @@
+{
+  "total_examples": 12435,
+  "source_distribution": {
+    "spider_base": 6990,
+    "spider_syn": 4795,
+    "sparc_contextual": 80,
+    "counterfactual_polarity": 570
+  },
+  "comparator_distribution": {
+    "<": 926,
+    ">": 1299,
+    "<=": 95,
+    ">=": 406,
+    "=": 6807
+  },
+  "database_count": 166
+}
