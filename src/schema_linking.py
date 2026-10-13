@@ -15,7 +15,7 @@ def split_question_head_tail(question: str) -> Tuple[str, str]:
       2. Condition / Filter clause (Tail: e.g. "who are born outside California")
     """
     q_clean = question.strip().rstrip("?").strip()
-    pattern = r'\b(where|whose|with|that have|that has|that are|who have|who has|who are|which have|which has|which are|having|for which|older than|younger than|greater than|less than|more than|born in|born outside|after|before)\b'
+    pattern = r'\b(where|whose|with|that have|that has|that are|who have|who has|who are|which have|which has|which are|having|for which|older than|younger than|greater than|less than|more than|higher than|lower than|lesser than|fewer than|under|over|above|below|born in|born outside|after|before)\b'
     m = re.search(pattern, q_clean, re.IGNORECASE)
     if m:
         head = q_clean[:m.start()].strip()

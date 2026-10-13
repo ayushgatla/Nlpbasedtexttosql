@@ -45,12 +45,16 @@ def parse_multi_conditions(
     parts = re.split(r'\b(?:or|and)\b', tail_text, flags=re.IGNORECASE) if conj else [tail_text]
 
     rules = [
-        ("greater than or equal", ">="), ("at least", ">="),
-        ("less than or equal", "<="), ("at most", "<="),
+        ("greater than or equal", ">="), ("at least", ">="), ("no less than", ">="),
+        ("less than or equal", "<="), ("at most", "<="), ("no more than", "<="), ("up to", "<="),
         ("greater than", ">"), ("more than", ">"), ("older than", ">"),
-        ("above age", ">"), ("above", ">"), ("bigger than", ">"), ("larger than", ">"),
-        ("less than", "<"), ("smaller than", "<"), ("younger than", "<"),
-        ("below age", "<"), ("below", "<"),
+        ("higher than", ">"), ("above age", ">"), ("above", ">"),
+        ("bigger than", ">"), ("larger than", ">"), ("exceeding", ">"), ("exceeds", ">"), ("over", ">"),
+        ("less than", "<"), ("lesser than", "<"), ("lesser", "<"),
+        ("smaller than", "<"), ("younger than", "<"),
+        ("lower than", "<"), ("lower", "<"),
+        ("fewer than", "<"), ("fewer", "<"),
+        ("below age", "<"), ("below", "<"), ("under", "<"),
         ("not equal", "!="), ("not in", "!="), ("born outside", "!="),
         ("different from", "!="), ("equal to", "="), ("is not", "!="), ("isn't", "!=")
     ]
@@ -61,7 +65,7 @@ def parse_multi_conditions(
 
         op = "="
         for phrase, symbol in rules:
-            if phrase in part_lower:
+            if re.search(r'\b' + re.escape(phrase) + r'\b', part_lower):
                 op = symbol
                 break
 

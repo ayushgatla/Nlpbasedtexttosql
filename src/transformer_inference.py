@@ -3,9 +3,32 @@ End-to-End Seq2Seq Transformer Inference Module.
 Handles schema serialization, prompt synthesis, checkpoint loading, and beam search decoding.
 """
 
+import re
 from typing import Dict, List, Any, Optional, Tuple
 import torch
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+
+
+def canonicalize_comparatives(question: str) -> str:
+    """
+    Normalizes comparative polarity expressions into canonical phrasing matching Spider distributions.
+    Resolves antonym collapse / polarity blindness (e.g., 'under 50' -> 'less than 50')
+    without degrading the model on standard benchmarks.
+    """
+    text = question
+    substitutions = [
+        (r'\b(at least|no less than)\b', 'greater than or equal to'),
+        (r'\b(at most|no more than|up to)\b', 'less than or equal to'),
+        (r'\b(lower than|lesser than|fewer than)\b', 'less than'),
+        (r'\bunder\s+(\d+)\b', r'less than \1'),
+        (r'\bbelow\s+(\d+)\b', r'less than \1'),
+        (r'\b(higher than|more than)\b', 'greater than'),
+        (r'\bover\s+(\d+)\b', r'greater than \1'),
+        (r'\babove\s+(\d+)\b', r'greater than \1'),
+    ]
+    for pat, repl in substitutions:
+        text = re.sub(pat, repl, text, flags=re.IGNORECASE)
+    return text
 
 
 def serialize_schema_for_prompt(db_id: str, tables_list: List[Dict[str, Any]]) -> str:
@@ -35,9 +58,11 @@ def format_seq2seq_prompt(
 ) -> str:
     """
     Synthesizes the complete prompt for the fine-tuned Seq2Seq model.
+    Applies comparative canonicalization to ensure robust polarity parsing.
     """
+    canonical_q = canonicalize_comparatives(question)
     schema_str = serialize_schema_for_prompt(db_id, tables_list)
-    return f"Translate to SQL: {question} | Database: {db_id} | Tables: {schema_str}"
+    return f"Translate to SQL: {canonical_q} | Database: {db_id} | Tables: {schema_str}"
 
 
 def load_transformer_model(
