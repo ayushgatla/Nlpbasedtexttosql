@@ -114,5 +114,28 @@ def predict_sql_transformer(
             early_stopping=True
         )
 
-    predicted_sql = tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
+    raw_decoded = tokenizer.decode(outputs[0], skip_special_tokens=False)
+    # T5's SentencePiece vocabulary treats '<' as <unk> (token ID 2).
+    # Preserving <unk> and mapping it back to '<' prevents dropping the operator.
+    predicted_sql = raw_decoded.replace("<pad>", "").replace("</s>", "").replace("<unk>", "<").strip()
+    # Normalize duplicate spaces around operators
+    predicted_sql = re.sub(r'\s+', ' ', predicted_sql)
+
+    # Recovery: if the model dropped an operator before a number in WHERE (e.g. "WHERE age 18")
+    if re.search(r'\bWHERE\s+([a-zA-Z_]\w*)\s+(\d+)\b', predicted_sql, re.IGNORECASE):
+        # Determine operator from user question
+        q_low = question.lower()
+        if any(w in q_low for w in ["less", "under", "smaller", "lower", "younger", "fewer", "below"]):
+            op = "<"
+        elif any(w in q_low for w in ["greater", "more", "older", "above", "higher", "over"]):
+            op = ">"
+        else:
+            op = "="
+        predicted_sql = re.sub(
+            r'\bWHERE\s+([a-zA-Z_]\w*)\s+(\d+)\b',
+            rf'WHERE \1 {op} \2',
+            predicted_sql,
+            flags=re.IGNORECASE
+        )
+
     return predicted_sql

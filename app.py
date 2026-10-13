@@ -472,20 +472,35 @@ if run_button or user_query:
         elif has_min:
             aggregations.append(("MIN", f"{target_tbl}.{num_col}"))
             
-        # Detect numeric filters
+        # Detect numeric filters and bind the correct column (closest preceding the comparison)
         where_conditions = []
-        gt_match = re.search(r'(?:>|greater than|more than|older than|above|higher than)\s*(\d+(?:\.\d+)?)', q_low)
-        lt_match = re.search(r'(?:<|less than|smaller than|younger than|below|lower than)\s*(\d+(?:\.\d+)?)', q_low)
+        gt_match = re.search(r'(?:>=|<=|>|greater than|more than|older than|above|higher than|over|exceeds|exceeding)\s*(\d+(?:\.\d+)?)', q_low)
+        lt_match = re.search(r'(?:<=|<|less than|smaller than|younger than|below|lower than|lesser than|fewer than|under)\s*(\d+(?:\.\d+)?)', q_low)
+
+        comp_match = gt_match or lt_match
+        filter_col = None
+        if comp_match:
+            before_comp = q_low[:comp_match.start()]
+            best_pos = -1
+            for c in cols:
+                c_clean = c.lower().replace("_", " ")
+                pos = max(before_comp.rfind(c.lower()), before_comp.rfind(c_clean))
+                if pos > best_pos:
+                    best_pos = pos
+                    filter_col = c
+            if not filter_col:
+                filter_col = next((c for c in cols if any(k in c.lower() for k in ["age", "salary", "gpa", "budget", "year", "price", "capacity", "score", "weight", "height"])), cols[-1] if cols else "*")
+
         if gt_match:
             where_conditions.append({
-                "column": f"{target_tbl}.{num_col}",
+                "column": f"{target_tbl}.{filter_col}",
                 "operator": ">",
                 "value": gt_match.group(1),
                 "is_string": False
             })
         elif lt_match:
             where_conditions.append({
-                "column": f"{target_tbl}.{num_col}",
+                "column": f"{target_tbl}.{filter_col}",
                 "operator": "<",
                 "value": lt_match.group(1),
                 "is_string": False
@@ -495,11 +510,18 @@ if run_button or user_query:
         order_by = None
         order_dir = None
         if "order" in q_low or "sort" in q_low:
-            order_by = f"{target_tbl}.{num_col}"
+            order_by = f"{target_tbl}.{filter_col if filter_col else num_col}"
             order_dir = "DESC" if any(w in q_low for w in ["desc", "descending", "oldest", "highest"]) else "ASC"
 
         # Check if user mentioned specific columns to project
         user_projected_cols = [c for c in cols if c.lower() in q_low or c.lower().replace("_", " ") in q_low]
+        if filter_col and len(user_projected_cols) > 1 and filter_col in user_projected_cols:
+            if comp_match:
+                head_text = q_low[:comp_match.start()]
+                head_cols = [c for c in user_projected_cols if c != filter_col and (c.lower() in head_text or c.lower().replace("_", " ") in head_text)]
+                if head_cols:
+                    user_projected_cols = head_cols
+
         if user_projected_cols:
             selected_cols = [f"{target_tbl}.{c}" for c in user_projected_cols]
         else:
