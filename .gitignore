@@ -29,3 +29,6 @@ test_fp32/
 test_mini_train/
 test_out/
 data/unified/cache/
+
+# Generated Documentation Artifacts
+documentation_pdfs/

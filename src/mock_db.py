@@ -165,6 +165,155 @@ def create_sample_databases() -> Dict[str, sqlite3.Connection]:
     car_conn.commit()
     connections["car_1"] = car_conn
 
+    # 4. STUDENTS Database
+    students_conn = sqlite3.connect(":memory:", check_same_thread=False)
+    students_cursor = students_conn.cursor()
+    students_cursor.executescript("""
+        CREATE TABLE students (
+            student_id INTEGER PRIMARY KEY,
+            name TEXT,
+            age INTEGER,
+            major TEXT
+        );
+        INSERT INTO students VALUES 
+            (1, 'Alice Smith', 20, 'Computer Science'),
+            (2, 'Bob Jones', 22, 'Mathematics'),
+            (3, 'Charlie Brown', 21, 'Physics');
+
+        CREATE TABLE courses (
+            course_id INTEGER PRIMARY KEY,
+            course_name TEXT,
+            department TEXT,
+            credits INTEGER
+        );
+        INSERT INTO courses VALUES
+            (101, 'Algorithms', 'Computer Science', 4),
+            (102, 'Calculus III', 'Mathematics', 4),
+            (103, 'Quantum Physics', 'Physics', 3);
+
+        CREATE TABLE enrollments (
+            enrollment_id INTEGER PRIMARY KEY,
+            student_id INTEGER,
+            course_id INTEGER,
+            grade TEXT,
+            FOREIGN KEY (student_id) REFERENCES students(student_id),
+            FOREIGN KEY (course_id) REFERENCES courses(course_id)
+        );
+        INSERT INTO enrollments VALUES
+            (1, 1, 101, 'A'),
+            (2, 2, 102, 'A-'),
+            (3, 3, 103, 'B+');
+    """)
+    students_conn.commit()
+    connections["students"] = students_conn
+
+    # 5. HOTEL Database
+    hotel_conn = sqlite3.connect(":memory:", check_same_thread=False)
+    hotel_cursor = hotel_conn.cursor()
+    hotel_cursor.executescript("""
+        CREATE TABLE hotel (
+            id INTEGER PRIMARY KEY,
+            name TEXT,
+            age INTEGER,
+            role TEXT,
+            salary INTEGER
+        );
+        INSERT INTO hotel VALUES 
+            (1, 'John Doe', 42, 'manager', 85000),
+            (2, 'Jane Doe', 28, 'receptionist', 45000),
+            (3, 'Sam Wilson', 35, 'chef', 60000),
+            (4, 'Emily Watson', 24, 'concierge', 40000);
+
+        CREATE TABLE rooms (
+            room_no INTEGER PRIMARY KEY,
+            room_type TEXT,
+            price_per_night REAL,
+            status TEXT
+        );
+        INSERT INTO rooms VALUES
+            (101, 'Deluxe Suite', 250.0, 'Occupied'),
+            (102, 'Standard King', 150.0, 'Available'),
+            (103, 'Executive Suite', 320.0, 'Occupied');
+    """)
+    hotel_conn.commit()
+    connections["hotel"] = hotel_conn
+
+    # 6. ECOMMERCE Database
+    ecom_conn = sqlite3.connect(":memory:", check_same_thread=False)
+    ecom_cursor = ecom_conn.cursor()
+    ecom_cursor.executescript("""
+        CREATE TABLE customers (
+            customer_id INTEGER PRIMARY KEY,
+            name TEXT,
+            email TEXT,
+            city TEXT
+        );
+        INSERT INTO customers VALUES
+            (1, 'Sarah Connor', 'sarah@example.com', 'Los Angeles'),
+            (2, 'John Connor', 'john@example.com', 'New York'),
+            (3, 'Kyle Reese', 'kyle@example.com', 'Chicago');
+
+        CREATE TABLE products (
+            product_id INTEGER PRIMARY KEY,
+            product_name TEXT,
+            category TEXT,
+            price REAL,
+            stock INTEGER
+        );
+        INSERT INTO products VALUES
+            (1, 'MacBook Pro', 'Electronics', 1999.99, 25),
+            (2, 'Wireless Headphones', 'Electronics', 199.99, 100),
+            (3, 'Ergonomic Desk Chair', 'Furniture', 349.50, 15);
+
+        CREATE TABLE orders (
+            order_id INTEGER PRIMARY KEY,
+            customer_id INTEGER,
+            product_id INTEGER,
+            quantity INTEGER,
+            order_date TEXT,
+            FOREIGN KEY (customer_id) REFERENCES customers(customer_id),
+            FOREIGN KEY (product_id) REFERENCES products(product_id)
+        );
+        INSERT INTO orders VALUES
+            (1, 1, 1, 1, '2024-01-15'),
+            (2, 2, 2, 2, '2024-02-10'),
+            (3, 3, 3, 1, '2024-03-01');
+    """)
+    ecom_conn.commit()
+    connections["ecommerce"] = ecom_conn
+
+    # 7. COMPANY Database
+    comp_conn = sqlite3.connect(":memory:", check_same_thread=False)
+    comp_cursor = comp_conn.cursor()
+    comp_cursor.executescript("""
+        CREATE TABLE departments (
+            dept_id INTEGER PRIMARY KEY,
+            dept_name TEXT,
+            budget INTEGER,
+            location TEXT
+        );
+        INSERT INTO departments VALUES
+            (1, 'Engineering', 1200000, 'San Francisco'),
+            (2, 'Marketing', 450000, 'New York'),
+            (3, 'Finance', 600000, 'Chicago');
+
+        CREATE TABLE employees (
+            emp_id INTEGER PRIMARY KEY,
+            name TEXT,
+            dept_id INTEGER,
+            salary INTEGER,
+            hire_year INTEGER,
+            FOREIGN KEY (dept_id) REFERENCES departments(dept_id)
+        );
+        INSERT INTO employees VALUES
+            (101, 'Alex Rivera', 1, 135000, 2020),
+            (102, 'Jessica Chen', 1, 145000, 2019),
+            (103, 'David Kim', 2, 92000, 2021),
+            (104, 'Maria Garcia', 3, 105000, 2018);
+    """)
+    comp_conn.commit()
+    connections["company"] = comp_conn
+
     return connections
 
 

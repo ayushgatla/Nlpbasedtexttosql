@@ -121,7 +121,7 @@ def predict_sql_transformer(
     # Normalize duplicate spaces around operators
     predicted_sql = re.sub(r'\s+', ' ', predicted_sql)
 
-    # Recovery: if the model dropped an operator before a number in WHERE (e.g. "WHERE age 18")
+    # 1. Recovery: if the model dropped an operator before a number in WHERE (e.g. "WHERE age 18")
     if re.search(r'\bWHERE\s+([a-zA-Z_]\w*)\s+(\d+)\b', predicted_sql, re.IGNORECASE):
         # Determine operator from user question
         q_low = question.lower()
@@ -138,4 +138,103 @@ def predict_sql_transformer(
             flags=re.IGNORECASE
         )
 
+    # 2. Extract known columns and database cell values for schema & entity grounding
+    known_cols = set()
+    entry = next((d for d in tables_list if d.get("db_id") == db_id), None)
+    if entry:
+        table_names = entry.get("table_names_original", [])
+        for t_id, c_name in entry.get("column_names_original", []):
+            if c_name != "*":
+                known_cols.add(c_name.lower())
+                if t_id >= 0 and t_id < len(table_names):
+                    known_cols.add(f"{table_names[t_id]}.{c_name}".lower())
+
+    known_db_values = []
+    try:
+        from src.mock_db import DB_CONNECTIONS
+        conn = DB_CONNECTIONS.get(db_id)
+        if conn and entry:
+            cur = conn.cursor()
+            for tbl in entry.get("table_names_original", []):
+                try:
+                    cur.execute(f"PRAGMA table_info({tbl})")
+                    for col_info in cur.fetchall():
+                        c = col_info[1]
+                        cur.execute(f"SELECT DISTINCT {c} FROM {tbl} WHERE {c} IS NOT NULL")
+                        for row in cur.fetchall():
+                            if row[0] is not None and isinstance(row[0], str) and str(row[0]).strip():
+                                known_db_values.append(str(row[0]).strip())
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    # 3. Auto-quote unquoted string literals after operators (e.g., WHERE role = manager -> WHERE role = 'manager')
+    def quote_unquoted_literal(match):
+        prefix = match.group(1)
+        token = match.group(2)
+        reserved = {'NULL', 'TRUE', 'FALSE', 'AND', 'OR', 'NOT', 'IS', 'IN', 'LIKE', 'BETWEEN', 'EXISTS'}
+        if token.upper() in reserved:
+            return match.group(0)
+        if token.lower() in known_cols:
+            return match.group(0)
+        return f"{prefix}'{token}'"
+
+    predicted_sql = re.sub(
+        r'(\b[a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)?\s*(?:=|!=|<>|LIKE)\s*)([a-zA-Z_]\w*)\b',
+        quote_unquoted_literal,
+        predicted_sql,
+        flags=re.IGNORECASE
+    )
+
+    # 4. Entity / Value Grounding for single-quoted literals (e.g., 'mathematician' -> 'Mathematics')
+    def ground_literal(match):
+        val = match.group(1)
+        val_low = val.lower()
+        # Check database values first
+        for dv in known_db_values:
+            if dv.lower() == val_low:
+                return f"'{dv}'"
+            if len(val_low) >= 4 and len(dv) >= 4 and val_low[:4] == dv.lower()[:4]:
+                return f"'{dv}'"
+        # Check tokens from question
+        q_words = re.findall(r'\b[a-zA-Z]{3,}\b', question)
+        for qw in q_words:
+            if len(val_low) >= 4 and len(qw) >= 4 and val_low[:4] == qw.lower()[:4]:
+                return f"'{qw}'"
+        return f"'{val}'"
+
+    predicted_sql = re.sub(r"'([^']+)'", ground_literal, predicted_sql)
+
+    # 5. Schema table name alignment (e.g. FROM student -> FROM students if table is plural/singular)
+    if entry:
+        table_names = entry.get("table_names_original", [])
+        tbl_map = {t.lower(): t for t in table_names}
+        for t in table_names:
+            t_low = t.lower()
+            if t_low.endswith("s"):
+                tbl_map[t_low[:-1]] = t
+            else:
+                tbl_map[t_low + "s"] = t
+
+        def fix_table_name(m):
+            clause = m.group(1)
+            tbl_used = m.group(2)
+            if tbl_used.lower() in tbl_map:
+                return f"{clause} {tbl_map[tbl_used.lower()]}"
+            return m.group(0)
+
+        predicted_sql = re.sub(r'\b(FROM|JOIN)\s+([a-zA-Z_]\w*)\b', fix_table_name, predicted_sql, flags=re.IGNORECASE)
+
+    # 6. Polarity alignment: if question expresses negation but model decoded '='
+    has_neg = bool(re.search(r'\b(?:did not|didn\'t|does not|doesn\'t|do not|don\'t|without|except|never|not)\b', question, re.IGNORECASE))
+    if has_neg and " != " not in predicted_sql and " NOT " not in predicted_sql.upper() and " <> " not in predicted_sql:
+        if "WHERE" in predicted_sql.upper():
+            where_idx = predicted_sql.upper().find("WHERE")
+            before_w = predicted_sql[:where_idx]
+            after_w = predicted_sql[where_idx:]
+            after_w_fixed = re.sub(r'(\s+=\s+)', r' != ', after_w, count=1)
+            predicted_sql = before_w + after_w_fixed
+
     return predicted_sql
+
