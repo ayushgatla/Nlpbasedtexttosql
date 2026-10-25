@@ -129,6 +129,7 @@ from src.mock_db import (
     register_custom_json_database
 )
 from src.sql_generator import compile_advanced_sql
+from src.schema_graph import plan_table_joins
 
 # Load tables.json if available
 tables_path = repo_root / "spider/evaluation_examples/examples/tables.json"
@@ -166,13 +167,36 @@ def get_tables_data_for_prompt(db_id: str, schema_tables: Dict[str, List[str]]):
         return [entry]
     t_names = list(schema_tables.keys())
     col_names = [[-1, "*"]]
+    col_to_idx = {}
     for t_idx, t in enumerate(t_names):
         for c in schema_tables[t]:
+            idx = len(col_names)
             col_names.append([t_idx, c])
+            col_to_idx[(t.lower(), c.lower())] = idx
+
+    foreign_keys = []
+    conn = DB_CONNECTIONS.get(db_id)
+    if conn:
+        try:
+            cur = conn.cursor()
+            for t in t_names:
+                cur.execute(f"PRAGMA foreign_key_list({t});")
+                for fk in cur.fetchall():
+                    to_tbl = fk[2]
+                    from_col = fk[3]
+                    to_col = fk[4]
+                    k1 = (t.lower(), from_col.lower())
+                    k2 = (to_tbl.lower(), to_col.lower())
+                    if k1 in col_to_idx and k2 in col_to_idx:
+                        foreign_keys.append([col_to_idx[k1], col_to_idx[k2]])
+        except Exception:
+            pass
+
     return [{
         "db_id": db_id,
         "table_names_original": t_names,
-        "column_names_original": col_names
+        "column_names_original": col_names,
+        "foreign_keys": foreign_keys
     }]
 
 # Curated Spider Presets
@@ -565,6 +589,10 @@ if run_button or user_query:
             if tbl_stem in q_low or tbl.lower() in q_low:
                 target_tbl = tbl
                 break
+
+        # Needed tables set tracking all referenced tables
+        needed_tables = set()
+        needed_tables.add(target_tbl)
                 
         # Detect aggregations
         has_count = any(k in q_low for k in ["count", "how many", "number of", "total number"])
@@ -574,7 +602,7 @@ if run_button or user_query:
         
         cols = schema_tables.get(target_tbl, [])
         
-        # 1. First, check if ANY column name in target_tbl is explicitly mentioned in the user query:
+        # 1. Target column for projection or aggregation:
         target_col = None
         for c in cols:
             c_norm = c.lower().replace("_", " ")
@@ -582,12 +610,11 @@ if run_button or user_query:
                 target_col = c
                 break
                 
-        # 2. If no column name was mentioned, fall back to meaningful metric columns (avoiding ID columns)
         if not target_col:
             non_id_cols = [c for c in cols if "id" not in c.lower()]
             search_pool = non_id_cols if non_id_cols else cols
             target_col = next(
-                (c for c in search_pool if any(k in c.lower() for k in ["age", "salary", "gpa", "capacity", "budget", "year", "price", "stock", "mpg", "weight", "score"])),
+                (c for c in search_pool if any(k in c.lower() for k in ["name", "age", "salary", "gpa", "capacity", "budget", "year", "price", "stock", "mpg", "weight", "score"])),
                 search_pool[0] if search_pool else "*"
             )
         
@@ -603,13 +630,14 @@ if run_button or user_query:
         elif has_min:
             aggregations.append(("MIN", f"{target_tbl}.{num_col}"))
             
-        # Detect filters (numeric, categorical text, and negation)
+        # Detect filters (numeric, categorical text across ALL tables, and negation)
         where_conditions = []
         gt_match = re.search(r'(?:>=|<=|>|greater than|more than|older than|above|higher than|over|exceeds|exceeding)\s*(\d+(?:\.\d+)?)', q_low)
         lt_match = re.search(r'(?:<=|<|less than|smaller than|younger than|below|lower than|lesser than|fewer than|under)\s*(\d+(?:\.\d+)?)', q_low)
 
         comp_match = gt_match or lt_match
         filter_col = None
+        filter_tbl = target_tbl
         if comp_match:
             before_comp = q_low[:comp_match.start()]
             best_pos = -1
@@ -637,60 +665,75 @@ if run_button or user_query:
                     "is_string": False
                 })
         else:
-            # Categorical text and negation condition detection
+            # Multi-Table text search: scan ALL tables in the database for matching values
             matched_text_condition = False
             db_conn = DB_CONNECTIONS.get(selected_db)
             if db_conn:
                 try:
                     cur = db_conn.cursor()
-                    for c in cols:
-                        try:
-                            cur.execute(f"SELECT DISTINCT {c} FROM {target_tbl} WHERE {c} IS NOT NULL")
-                            for (raw_val,) in cur.fetchall():
-                                if raw_val is not None and isinstance(raw_val, str) and len(str(raw_val).strip()) > 1:
-                                    s_val = str(raw_val).strip()
-                                    s_low = s_val.lower()
-                                    if s_low in q_low or (len(s_low) >= 4 and s_low[:4] in q_low):
-                                        neg_match = re.search(
-                                            r'\b(?:not|didn\'t|did not|doesn\'t|does not|don\'t|do not|without|except|never|!=|<>)\b',
-                                            q_low
-                                        )
-                                        op = "!=" if neg_match else "="
-                                        where_conditions.append({
-                                            "column": f"{target_tbl}.{c}",
-                                            "operator": op,
-                                            "value": s_val,
-                                            "is_string": True
-                                        })
-                                        filter_col = c
-                                        matched_text_condition = True
-                                        break
-                            if matched_text_condition:
-                                break
-                        except Exception:
-                            pass
+                    for tbl_cand, t_cols in schema_tables.items():
+                        for c in t_cols:
+                            try:
+                                cur.execute(f"SELECT DISTINCT {c} FROM {tbl_cand} WHERE {c} IS NOT NULL")
+                                for (raw_val,) in cur.fetchall():
+                                    if raw_val is not None and isinstance(raw_val, str) and len(str(raw_val).strip()) > 1:
+                                        s_val = str(raw_val).strip()
+                                        s_low = s_val.lower()
+                                        if s_low in q_low or (len(s_low) >= 4 and s_low[:4] in q_low):
+                                            neg_match = re.search(
+                                                r'\b(?:not|didn\'t|did not|doesn\'t|does not|don\'t|do not|without|except|never|!=|<>)\b',
+                                                q_low
+                                            )
+                                            op = "!=" if neg_match else "="
+                                            where_conditions.append({
+                                                "column": f"{tbl_cand}.{c}",
+                                                "operator": op,
+                                                "value": s_val,
+                                                "is_string": True
+                                            })
+                                            filter_col = c
+                                            filter_tbl = tbl_cand
+                                            needed_tables.add(tbl_cand)
+                                            matched_text_condition = True
+                                            break
+                                if matched_text_condition:
+                                    break
+                            except Exception:
+                                pass
+                        if matched_text_condition:
+                            break
                 except Exception:
                     pass
 
             if not matched_text_condition:
-                for c in cols:
-                    c_clean = c.lower().replace("_", " ")
-                    m = re.search(rf'\b{re.escape(c_clean)}\b\s+(?:of|is|as|equals?|named?|with|=)\s+([a-zA-Z_]+)', q_low)
-                    if not m:
-                        m = re.search(rf'\b(?:role|type|category|status|name|major)\s+of\s+([a-zA-Z_]+)', q_low)
-                    if m:
-                        val_extracted = m.group(1).strip()
-                        if val_extracted not in {"the", "a", "an", "all", "each", "every", "hotel", "student", target_tbl.lower()}:
-                            neg_match = re.search(r'\b(?:not|didn\'t|did not|doesn\'t|does not|don\'t|do not|without|!=|<>)\b', q_low)
-                            op = "!=" if neg_match else "="
-                            where_conditions.append({
-                                "column": f"{target_tbl}.{c}",
-                                "operator": op,
-                                "value": val_extracted,
-                                "is_string": True
-                            })
-                            filter_col = c
-                            break
+                for tbl_cand, t_cols in schema_tables.items():
+                    for c in t_cols:
+                        c_clean = c.lower().replace("_", " ")
+                        m = re.search(rf'\b{re.escape(c_clean)}\b\s+(?:of|is|as|equals?|named?|with|=)\s+([a-zA-Z_]+)', q_low)
+                        if not m:
+                            m = re.search(rf'\b(?:role|type|category|status|name|major)\s+of\s+([a-zA-Z_]+)', q_low)
+                        if m:
+                            val_extracted = m.group(1).strip()
+                            if val_extracted not in {"the", "a", "an", "all", "each", "every", "hotel", "student", tbl_cand.lower()}:
+                                neg_match = re.search(r'\b(?:not|didn\'t|did not|doesn\'t|does not|don\'t|do not|without|!=|<>)\b', q_low)
+                                op = "!=" if neg_match else "="
+                                where_conditions.append({
+                                    "column": f"{tbl_cand}.{c}",
+                                    "operator": op,
+                                    "value": val_extracted,
+                                    "is_string": True
+                                })
+                                filter_col = c
+                                filter_tbl = tbl_cand
+                                needed_tables.add(tbl_cand)
+                                break
+                    if where_conditions:
+                        break
+
+        # Also detect if any other tables are explicitly mentioned in question
+        for tbl in available_tbl_names:
+            if tbl.lower() in q_low or tbl.rstrip("s").lower() in q_low:
+                needed_tables.add(tbl)
 
         # Check sorting
         order_by = None
@@ -711,13 +754,21 @@ if run_button or user_query:
         if user_projected_cols:
             selected_cols = [f"{target_tbl}.{c}" for c in user_projected_cols]
         else:
-            selected_cols = [f"{target_tbl}.{c}" for c in (cols[:5] if cols else ["*"])]
+            non_id = [c for c in cols if "id" not in c.lower()]
+            p_col = next((c for c in non_id if "name" in c.lower()), non_id[0]) if non_id else cols[0]
+            selected_cols = [f"{target_tbl}.{p_col}"]
+
+        # Multi-Table Join Planning via Foreign-Key Steiner Graph
+        t5_tables = get_tables_data_for_prompt(selected_db, schema_tables)
+        db_schema_entry = t5_tables[0] if t5_tables else {"table_names_original": available_tbl_names, "foreign_keys": []}
+
+        primary_tbl, joins = plan_table_joins(list(needed_tables), db_schema_entry, primary_table=target_tbl)
 
         ir_data = {
-            "main_table": target_tbl,
+            "main_table": primary_tbl,
             "select": [] if aggregations else selected_cols,
             "aggregations": aggregations,
-            "joins": [],
+            "joins": joins,
             "where": where_conditions,
             "group_by": [],
             "order_by": order_by,

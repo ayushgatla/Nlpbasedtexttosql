@@ -236,5 +236,51 @@ def predict_sql_transformer(
             after_w_fixed = re.sub(r'(\s+=\s+)', r' != ', after_w, count=1)
             predicted_sql = before_w + after_w_fixed
 
+    # 7. Multi-Table Relational Join Grounding & Automatic Repair
+    if entry:
+        try:
+            from src.schema_graph import plan_table_joins
+            from_match = re.search(r'\bFROM\s+([a-zA-Z_]\w*)', predicted_sql, re.IGNORECASE)
+            if from_match:
+                main_table = from_match.group(1)
+                existing_tables = set(re.findall(r'\b(?:FROM|JOIN)\s+([a-zA-Z_]\w*)', predicted_sql, re.IGNORECASE))
+                existing_lowers = {t.lower() for t in existing_tables}
+
+                col_to_table = {}
+                table_names = entry.get("table_names_original", [])
+                for t_id, c_name in entry.get("column_names_original", []):
+                    if t_id >= 0 and c_name != "*":
+                        col_to_table[c_name.lower()] = table_names[t_id]
+
+                missing_tables = set()
+                for token in re.findall(r'\b[a-zA-Z_]\w*\b', predicted_sql):
+                    tok_low = token.lower()
+                    if tok_low in col_to_table:
+                        tbl = col_to_table[tok_low]
+                        if tbl.lower() not in existing_lowers:
+                            missing_tables.add(tbl)
+
+                q_low = question.lower()
+                for tbl in table_names:
+                    if tbl.lower() not in existing_lowers and (tbl.lower() in q_low or tbl.rstrip("s").lower() in q_low):
+                        missing_tables.add(tbl)
+
+                if missing_tables:
+                    needed = list(existing_tables) + list(missing_tables)
+                    _, joins = plan_table_joins(needed, entry, primary_table=main_table)
+                    if joins:
+                        new_joins = [j for j in joins if j["table"].lower() not in existing_lowers]
+                        if new_joins:
+                            join_str = " ".join(f"JOIN {j['table']} ON {j['condition']}" for j in new_joins)
+                            predicted_sql = re.sub(
+                                rf'\bFROM\s+{re.escape(main_table)}\b',
+                                f"FROM {main_table} {join_str}",
+                                predicted_sql,
+                                count=1,
+                                flags=re.IGNORECASE
+                            )
+        except Exception:
+            pass
+
     return predicted_sql
 
