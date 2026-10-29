@@ -31,37 +31,61 @@ def canonicalize_comparatives(question: str) -> str:
     return text
 
 
-def serialize_schema_for_prompt(db_id: str, tables_list: List[Dict[str, Any]]) -> str:
+def serialize_schema_for_prompt(
+    db_id: str,
+    tables_list: List[Dict[str, Any]],
+    include_foreign_keys: bool = True
+) -> str:
     """
-    Serializes a database schema into a compact text string suitable for transformer input:
-    'table1 ( col1, col2 ) | table2 ( col3, col4 )'
+    Serializes a database schema into an information-rich sequence representation:
+    'table1 ( col1*, col2 ) | table2 ( col3*, col4 ) | Foreign Keys: table1.col2 = table2.col3'
+    Includes Primary Keys (*) and Foreign Keys to provide relational context for multi-table joins.
     """
-    entry = next((d for d in tables_list if d["db_id"] == db_id), None)
+    entry = next((d for d in tables_list if d.get("db_id") == db_id), None)
     if not entry:
         return ""
 
-    table_names = entry["table_names_original"]
+    table_names = entry.get("table_names_original", [])
     table_to_cols = {t: [] for t in table_names}
+    pk_cols = set(entry.get("primary_keys", []))
 
-    for t_id, c_name in entry["column_names_original"]:
+    for idx, (t_id, c_name) in enumerate(entry.get("column_names_original", [])):
         if t_id >= 0 and c_name != "*":
-            table_to_cols[table_names[t_id]].append(c_name)
+            is_pk = idx in pk_cols
+            col_display = f"{c_name}*" if is_pk else c_name
+            if t_id < len(table_names):
+                table_to_cols[table_names[t_id]].append(col_display)
 
     parts = [f"{tbl} ( {', '.join(cols)} )" for tbl, cols in table_to_cols.items()]
-    return " | ".join(parts)
+    schema_str = " | ".join(parts)
+
+    if include_foreign_keys and entry.get("foreign_keys"):
+        fk_relations = []
+        for a, b in entry["foreign_keys"]:
+            cols = entry.get("column_names_original", [])
+            if a < len(cols) and b < len(cols):
+                t1, c1 = cols[a]
+                t2, c2 = cols[b]
+                if t1 < len(table_names) and t2 < len(table_names):
+                    fk_relations.append(f"{table_names[t1]}.{c1} = {table_names[t2]}.{c2}")
+        if fk_relations:
+            schema_str += " | Foreign Keys: " + ", ".join(fk_relations)
+
+    return schema_str
 
 
 def format_seq2seq_prompt(
     question: str,
     db_id: str,
-    tables_list: List[Dict[str, Any]]
+    tables_list: List[Dict[str, Any]],
+    include_foreign_keys: bool = True
 ) -> str:
     """
     Synthesizes the complete prompt for the fine-tuned Seq2Seq model.
-    Applies comparative canonicalization to ensure robust polarity parsing.
+    Applies comparative canonicalization and relational schema serialization.
     """
     canonical_q = canonicalize_comparatives(question)
-    schema_str = serialize_schema_for_prompt(db_id, tables_list)
+    schema_str = serialize_schema_for_prompt(db_id, tables_list, include_foreign_keys=include_foreign_keys)
     return f"Translate to SQL: {canonical_q} | Database: {db_id} | Tables: {schema_str}"
 
 
@@ -86,20 +110,27 @@ def predict_sql_transformer(
     db_id: str,
     tables_list: List[Dict[str, Any]],
     model: Any,
-    tokenizer: Any,
+    tokenizer: Optional[Any] = None,
+    processing_class: Optional[Any] = None,
     device: str = "cpu",
     num_beams: int = 4,
-    max_length: int = 128
+    max_length: int = 128,
+    max_input_len: int = 512
 ) -> str:
     """
     Translates a natural language question into SQL using beam search decoding.
+    Accepts either `tokenizer` or `processing_class` for HuggingFace compatibility.
     """
+    tk = tokenizer if tokenizer is not None else processing_class
+    if tk is None:
+        raise ValueError("Either `tokenizer` or `processing_class` must be provided to predict_sql_transformer.")
+
     prompt = format_seq2seq_prompt(question, db_id, tables_list)
     model.eval()
 
-    inputs = tokenizer(
+    inputs = tk(
         prompt,
-        max_length=384,
+        max_length=max_input_len,
         padding="max_length",
         truncation=True,
         return_tensors="pt"
@@ -114,7 +145,7 @@ def predict_sql_transformer(
             early_stopping=True
         )
 
-    raw_decoded = tokenizer.decode(outputs[0], skip_special_tokens=False)
+    raw_decoded = tk.decode(outputs[0], skip_special_tokens=False)
     # T5's SentencePiece vocabulary treats '<' as <unk> (token ID 2).
     # Preserving <unk> and mapping it back to '<' prevents dropping the operator.
     predicted_sql = raw_decoded.replace("<pad>", "").replace("</s>", "").replace("<unk>", "<").strip()

@@ -156,18 +156,41 @@ def generate_polarity_inversions(examples: List[Dict[str, Any]]) -> List[Dict[st
     return inverted_pairs
 
 
-def serialize_schema(db_id: str, tables_data: List[Dict[str, Any]]) -> str:
-    """Serializes database schema into standard compact sequence format."""
-    entry = next((d for d in tables_data if d["db_id"] == db_id), None)
+def serialize_schema(db_id: str, tables_data: List[Dict[str, Any]], include_foreign_keys: bool = True) -> str:
+    """
+    Serializes database schema into relational sequence format with tables,
+    columns, primary keys (*), and explicit foreign keys.
+    """
+    entry = next((d for d in tables_data if d.get("db_id") == db_id), None)
     if not entry:
         return ""
-    table_names = entry["table_names_original"]
+    table_names = entry.get("table_names_original", [])
     table_to_cols = {t: [] for t in table_names}
-    for t_id, c_name in entry["column_names_original"]:
+    pk_cols = set(entry.get("primary_keys", []))
+
+    for idx, (t_id, c_name) in enumerate(entry.get("column_names_original", [])):
         if t_id >= 0 and c_name != "*":
-            table_to_cols[table_names[t_id]].append(c_name)
+            is_pk = idx in pk_cols
+            col_display = f"{c_name}*" if is_pk else c_name
+            if t_id < len(table_names):
+                table_to_cols[table_names[t_id]].append(col_display)
+
     parts = [f"{tbl} ( {', '.join(cols)} )" for tbl, cols in table_to_cols.items()]
-    return " | ".join(parts)
+    schema_str = " | ".join(parts)
+
+    if include_foreign_keys and entry.get("foreign_keys"):
+        fk_relations = []
+        cols = entry.get("column_names_original", [])
+        for a, b in entry["foreign_keys"]:
+            if a < len(cols) and b < len(cols):
+                t1, c1 = cols[a]
+                t2, c2 = cols[b]
+                if t1 < len(table_names) and t2 < len(table_names):
+                    fk_relations.append(f"{table_names[t1]}.{c1} = {table_names[t2]}.{c2}")
+        if fk_relations:
+            schema_str += " | Foreign Keys: " + ", ".join(fk_relations)
+
+    return schema_str
 
 
 def build_unified_dataset(
