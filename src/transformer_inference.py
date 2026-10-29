@@ -152,6 +152,10 @@ def predict_sql_transformer(
     # Normalize duplicate spaces around operators
     predicted_sql = re.sub(r'\s+', ' ', predicted_sql)
 
+    # Normalize missing AS keyword for table aliases (e.g. FROM concert T1 -> FROM concert AS T1)
+    # Required for official Spider AST parser which rejects aliases without AS
+    predicted_sql = re.sub(r'\b(FROM|JOIN)\s+([a-zA-Z_]\w*)\s+(T\d+)\b', r'\1 \2 AS \3', predicted_sql, flags=re.IGNORECASE)
+
     # 1. Recovery: if the model dropped an operator before a number in WHERE (e.g. "WHERE age 18")
     if re.search(r'\bWHERE\s+([a-zA-Z_]\w*)\s+(\d+)\b', predicted_sql, re.IGNORECASE):
         # Determine operator from user question
