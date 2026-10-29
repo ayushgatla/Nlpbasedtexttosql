@@ -7,6 +7,14 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple, Callable
 
+# Ensure NLTK tokenizers are available for official Spider AST parser
+try:
+    import nltk
+    nltk.download('punkt', quiet=True)
+    nltk.download('punkt_tab', quiet=True)
+except Exception:
+    pass
+
 # Ensure spider parser package is in sys.path
 repo_root = Path(__file__).resolve().parent.parent
 spider_path = repo_root / "spider"
@@ -54,25 +62,43 @@ def evaluate_single_ast_match(
     if evaluator is None:
         evaluator = Evaluator()
 
+    hardness = "medium"
+    sp_sch = None
+    kmap = None
+    g_sql = None
+
     try:
         sp_sch, kmap = build_spider_schema(db_id, tables_data)
         g_sql = get_sql(sp_sch, gold_sql)
         hardness = evaluator.eval_hardness(g_sql)
+    except Exception:
+        gold_low = gold_sql.lower()
+        if any(k in gold_low for k in ["except", "union", "intersect"]):
+            hardness = "extra"
+        elif "join" in gold_low or "group by" in gold_low:
+            hardness = "hard"
+        else:
+            hardness = "easy"
 
+    if sp_sch is None or g_sql is None:
+        return False, hardness
+
+    try:
         p_sql = get_sql(sp_sch, pred_sql)
 
         g_val = build_valid_col_units(g_sql['from']['table_units'], sp_sch)
-        g_sql = rebuild_sql_val(g_sql)
-        g_sql = rebuild_sql_col(g_val, g_sql, kmap)
+        g_sql_rb = rebuild_sql_val(g_sql)
+        g_sql_rb = rebuild_sql_col(g_val, g_sql_rb, kmap)
 
         p_val = build_valid_col_units(p_sql['from']['table_units'], sp_sch)
-        p_sql = rebuild_sql_val(p_sql)
-        p_sql = rebuild_sql_col(p_val, p_sql, kmap)
+        p_sql_rb = rebuild_sql_val(p_sql)
+        p_sql_rb = rebuild_sql_col(p_val, p_sql_rb, kmap)
 
-        match = evaluator.eval_exact_match(p_sql, g_sql)
+        match = evaluator.eval_exact_match(p_sql_rb, g_sql_rb)
         return bool(match), hardness
     except Exception:
-        return False, "unknown"
+        # If predicted query has AST or syntax errors, match is False but hardness is preserved!
+        return False, hardness
 
 
 def evaluate_spider_ast_benchmark(
