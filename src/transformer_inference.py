@@ -105,6 +105,185 @@ def load_transformer_model(
     return model, tokenizer, device
 
 
+def repair_sql_schema_mismatches(
+    predicted_sql: str,
+    db_id: str,
+    tables_list: List[Dict[str, Any]]
+) -> str:
+    """
+    Validates and repairs relational schema mismatches in generated SQL:
+    1. Reassigns columns to the correct table alias if misplaced (e.g. T2.Age -> T1.Age).
+    2. Detects missing tables required by misplaced columns (e.g. T2.Concert_Name where Concert_Name
+       belongs to table 'concert'), automatically plans the FK join, appends the JOIN clause,
+       and assigns the new alias.
+    3. Normalizes double-quoted literals to single quotes for SQLite.
+    """
+    entry = next((d for d in tables_list if d.get("db_id") == db_id), None)
+    if not entry:
+        return predicted_sql
+
+    sql = predicted_sql.strip()
+
+    # 1. Normalize double quotes around string literals to single quotes
+    sql = re.sub(r'"([^"\\]*(?:\\.[^"\\]*)*)"', r"'\1'", sql)
+
+    table_names = entry.get("table_names_original", [])
+    col_to_tables: Dict[str, List[str]] = {}
+    table_to_cols: Dict[str, Dict[str, str]] = {t.lower(): {} for t in table_names}
+
+    for t_id, c_name in entry.get("column_names_original", []):
+        if t_id >= 0 and c_name != "*":
+            t_orig = table_names[t_id]
+            t_low = t_orig.lower()
+            c_low = c_name.lower()
+            col_to_tables.setdefault(c_low, []).append(t_orig)
+            table_to_cols[t_low][c_low] = c_name
+
+    # 1b. Ground literal values against live database cells to resolve column mismatches
+    # e.g. T2.Concert_Name = 'Acoustic Evenings' -> checks if Acoustic Evenings is in concert_name vs Theme
+    try:
+        from src.mock_db import DB_CONNECTIONS
+        conn = DB_CONNECTIONS.get(db_id)
+        if conn:
+            cur = conn.cursor()
+            literal_matches = re.findall(r"([a-zA-Z_]\w*\.[a-zA-Z_]\w*)\s*(?:=|LIKE)\s*'([^']+)'", sql, re.IGNORECASE)
+            for col_ref, lit_val in literal_matches:
+                found_col = None
+                for tbl in table_names:
+                    cur.execute(f"PRAGMA table_info({tbl})")
+                    for c_info in cur.fetchall():
+                        col = c_info[1]
+                        try:
+                            cur.execute(f"SELECT 1 FROM {tbl} WHERE LOWER({col}) = LOWER(?) LIMIT 1", (lit_val,))
+                            if cur.fetchone():
+                                found_col = col
+                                break
+                        except Exception:
+                            pass
+                    if found_col:
+                        break
+                if found_col:
+                    ref_prefix, ref_col = col_ref.split(".")
+                    if ref_col.lower() != found_col.lower():
+                        sql = re.sub(rf'\b{re.escape(col_ref)}\b', f"{ref_prefix}.{found_col}", sql)
+    except Exception:
+        pass
+
+    # 2. Extract existing tables and aliases in FROM / JOIN
+    alias_to_table: Dict[str, str] = {}
+    table_to_alias: Dict[str, str] = {}
+    used_alias_nums = set()
+
+    for m in re.finditer(r'\b(?:FROM|JOIN)\s+([a-zA-Z_]\w*)\s+(?:AS\s+)?(T\d+)\b', sql, re.IGNORECASE):
+        tbl_name = m.group(1)
+        alias = m.group(2)
+        real_tbl = next((t for t in table_names if t.lower() == tbl_name.lower()), tbl_name)
+        alias_to_table[alias.upper()] = real_tbl
+        table_to_alias[real_tbl.lower()] = alias.upper()
+        try:
+            used_alias_nums.add(int(alias[1:]))
+        except Exception:
+            pass
+
+    if not alias_to_table:
+        for m in re.finditer(r'\b(?:FROM|JOIN)\s+([a-zA-Z_]\w*)\b', sql, re.IGNORECASE):
+            tbl_name = m.group(1)
+            real_tbl = next((t for t in table_names if t.lower() == tbl_name.lower()), None)
+            if real_tbl:
+                table_to_alias[real_tbl.lower()] = real_tbl
+
+    # 3. Find all column references like T1.ColumnName or Table.ColumnName
+    missing_tables_to_add = []
+
+    def inspect_col_ref(match):
+        full_match = match.group(0)
+        prefix = match.group(1)
+        col_name = match.group(2)
+        prefix_upper = prefix.upper()
+        prefix_low = prefix.lower()
+        col_low = col_name.lower()
+
+        curr_table = alias_to_table.get(prefix_upper) or (prefix if prefix_low in table_to_cols else None)
+        if not curr_table:
+            return full_match
+
+        if col_low in table_to_cols.get(curr_table.lower(), {}):
+            real_col = table_to_cols[curr_table.lower()][col_low]
+            return f"{prefix}.{real_col}"
+
+        candidate_tables = col_to_tables.get(col_low, [])
+        if not candidate_tables:
+            return full_match
+
+        # Case A: Belong to a table already in query
+        for cand in candidate_tables:
+            if cand.lower() in table_to_alias:
+                correct_alias = table_to_alias[cand.lower()]
+                real_col = table_to_cols[cand.lower()][col_low]
+                return f"{correct_alias}.{real_col}"
+
+        # Case B: Table missing from query
+        target_table = candidate_tables[0]
+        missing_tables_to_add.append((target_table, col_low))
+        return f"__NEED_{target_table.upper()}__.{col_name}"
+
+    sql_repaired = re.sub(
+        r'\b([a-zA-Z_]\w*)\.([a-zA-Z_]\w*)\b',
+        inspect_col_ref,
+        sql
+    )
+
+    # 4. If missing tables were detected, plan and insert foreign key joins
+    if missing_tables_to_add:
+        try:
+            from src.schema_graph import build_foreign_key_graph, find_shortest_join_path
+            fk_graph = build_foreign_key_graph(entry)
+
+            next_num = max(used_alias_nums, default=1) + 1
+            joins_to_append = []
+
+            for target_table, col_low in missing_tables_to_add:
+                if target_table.lower() in table_to_alias:
+                    continue
+
+                best_path = None
+                for exist_alias, exist_tbl in alias_to_table.items():
+                    path = find_shortest_join_path(fk_graph, exist_tbl, target_table)
+                    if path is not None:
+                        if best_path is None or len(path) < len(best_path):
+                            best_path = path
+
+                if best_path:
+                    for from_tbl, from_col, to_tbl, to_col in best_path:
+                        if to_tbl.lower() not in table_to_alias:
+                            new_alias = f"T{next_num}"
+                            next_num += 1
+                            from_alias = table_to_alias.get(from_tbl.lower(), from_tbl)
+                            joins_to_append.append(
+                                f"JOIN {to_tbl} AS {new_alias} ON {from_alias}.{from_col} = {new_alias}.{to_col}"
+                            )
+                            table_to_alias[to_tbl.lower()] = new_alias
+                            alias_to_table[new_alias] = to_tbl
+
+                assigned_alias = table_to_alias.get(target_table.lower(), target_table)
+                real_col = table_to_cols[target_table.lower()][col_low]
+                sql_repaired = sql_repaired.replace(f"__NEED_{target_table.upper()}__", assigned_alias)
+
+            if joins_to_append:
+                join_str = " " + " ".join(joins_to_append)
+                clause_match = re.search(r'\b(WHERE|GROUP\s+BY|ORDER\s+BY|LIMIT|HAVING)\b', sql_repaired, re.IGNORECASE)
+                if clause_match:
+                    split_pos = clause_match.start()
+                    sql_repaired = sql_repaired[:split_pos].rstrip() + join_str + " " + sql_repaired[split_pos:].lstrip()
+                else:
+                    sql_repaired = sql_repaired.rstrip() + join_str
+        except Exception:
+            pass
+
+    sql_repaired = re.sub(r'\s+', ' ', sql_repaired).strip()
+    return sql_repaired
+
+
 def predict_sql_transformer(
     question: str,
     db_id: str,
@@ -273,51 +452,10 @@ def predict_sql_transformer(
             after_w_fixed = re.sub(r'(\s+=\s+)', r' != ', after_w, count=1)
             predicted_sql = before_w + after_w_fixed
 
-    # 7. Multi-Table Relational Join Grounding & Automatic Repair (Only applies if model generated no joins at all)
-    if entry and " JOIN " not in predicted_sql.upper():
-        try:
-            from src.schema_graph import plan_table_joins
-            from_match = re.search(r'\bFROM\s+([a-zA-Z_]\w*)', predicted_sql, re.IGNORECASE)
-            if from_match:
-                main_table = from_match.group(1)
-                existing_tables = set(re.findall(r'\b(?:FROM|JOIN)\s+([a-zA-Z_]\w*)', predicted_sql, re.IGNORECASE))
-                existing_lowers = {t.lower() for t in existing_tables}
-
-                col_to_table = {}
-                table_names = entry.get("table_names_original", [])
-                for t_id, c_name in entry.get("column_names_original", []):
-                    if t_id >= 0 and c_name != "*":
-                        col_to_table[c_name.lower()] = table_names[t_id]
-
-                missing_tables = set()
-                for token in re.findall(r'\b[a-zA-Z_]\w*\b', predicted_sql):
-                    tok_low = token.lower()
-                    if tok_low in col_to_table:
-                        tbl = col_to_table[tok_low]
-                        if tbl.lower() not in existing_lowers:
-                            missing_tables.add(tbl)
-
-                q_low = question.lower()
-                for tbl in table_names:
-                    if tbl.lower() not in existing_lowers and (tbl.lower() in q_low or tbl.rstrip("s").lower() in q_low):
-                        missing_tables.add(tbl)
-
-                if missing_tables:
-                    needed = list(existing_tables) + list(missing_tables)
-                    _, joins = plan_table_joins(needed, entry, primary_table=main_table)
-                    if joins:
-                        new_joins = [j for j in joins if j["table"].lower() not in existing_lowers]
-                        if new_joins:
-                            join_str = " ".join(f"JOIN {j['table']} ON {j['condition']}" for j in new_joins)
-                            predicted_sql = re.sub(
-                                rf'\bFROM\s+{re.escape(main_table)}\b',
-                                f"FROM {main_table} {join_str}",
-                                predicted_sql,
-                                count=1,
-                                flags=re.IGNORECASE
-                            )
-        except Exception:
-            pass
+    # 7. Relational Schema Grounding & Syntax Repair
+    # Reassigns misplaced column aliases, auto-joins missing tables via foreign keys,
+    # and fixes quote delimiters for clean SQLite execution.
+    predicted_sql = repair_sql_schema_mismatches(predicted_sql, db_id, tables_list)
 
     return predicted_sql
 
