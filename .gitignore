@@ -17,6 +17,7 @@ Day3.ipynb.bak
 # Large Saved Model Weights (Do not push 1GB weights to GitHub)
 saved_flan_t5_sql/
 best_model/
+best_model_v2_relational/
 *.safetensors
 *.bin
 

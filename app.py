@@ -147,6 +147,7 @@ if tables_path.exists():
 # Model Detection & Caching Helpers
 def find_model_path():
     candidates = [
+        Path("./best_model_v2_relational"),
         Path("./saved_flan_t5_sql/best_model"),
         Path("/content/drive/MyDrive/nlp_project/saved_flan_t5_sql/best_model"),
         Path("best_model")

@@ -213,10 +213,12 @@ def predict_sql_transformer(
             return match.group(0)
         if token.lower() in known_cols:
             return match.group(0)
+        if re.match(r'^T\d+$', token, re.IGNORECASE):
+            return match.group(0)
         return f"{prefix}'{token}'"
 
     predicted_sql = re.sub(
-        r'(\b[a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)?\s*(?:=|!=|<>|LIKE)\s*)([a-zA-Z_]\w*)\b',
+        r'(\b[a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)?\s*(?:=|!=|<>|LIKE)\s*)([a-zA-Z_]\w*)\b(?!\.)',
         quote_unquoted_literal,
         predicted_sql,
         flags=re.IGNORECASE
@@ -271,8 +273,8 @@ def predict_sql_transformer(
             after_w_fixed = re.sub(r'(\s+=\s+)', r' != ', after_w, count=1)
             predicted_sql = before_w + after_w_fixed
 
-    # 7. Multi-Table Relational Join Grounding & Automatic Repair
-    if entry:
+    # 7. Multi-Table Relational Join Grounding & Automatic Repair (Only applies if model generated no joins at all)
+    if entry and " JOIN " not in predicted_sql.upper():
         try:
             from src.schema_graph import plan_table_joins
             from_match = re.search(r'\bFROM\s+([a-zA-Z_]\w*)', predicted_sql, re.IGNORECASE)
