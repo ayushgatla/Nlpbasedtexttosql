@@ -33,3 +33,5 @@ data/unified/cache/
 
 # Generated Documentation Artifacts
 documentation_pdfs/
+
+data/wikisql/
