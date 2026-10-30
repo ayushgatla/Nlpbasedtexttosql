@@ -4,6 +4,7 @@ Handles schema serialization, prompt synthesis, checkpoint loading, and beam sea
 """
 
 import re
+import difflib
 from typing import Dict, List, Any, Optional, Tuple
 import torch
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
@@ -149,14 +150,25 @@ def repair_sql_schema_mismatches(
             literal_matches = re.findall(r"([a-zA-Z_]\w*\.[a-zA-Z_]\w*)\s*(?:=|LIKE)\s*'([^']+)'", sql, re.IGNORECASE)
             for col_ref, lit_val in literal_matches:
                 found_col = None
+                matched_val = None
                 for tbl in table_names:
                     cur.execute(f"PRAGMA table_info({tbl})")
                     for c_info in cur.fetchall():
                         col = c_info[1]
                         try:
-                            cur.execute(f"SELECT 1 FROM {tbl} WHERE LOWER({col}) = LOWER(?) LIMIT 1", (lit_val,))
-                            if cur.fetchone():
+                            cur.execute(f"SELECT {col} FROM {tbl} WHERE LOWER({col}) = LOWER(?) LIMIT 1", (lit_val,))
+                            row = cur.fetchone()
+                            if row:
                                 found_col = col
+                                matched_val = row[0]
+                                break
+                            cur.execute(f"SELECT DISTINCT {col} FROM {tbl} WHERE {col} IS NOT NULL")
+                            for (cell_v,) in cur.fetchall():
+                                if isinstance(cell_v, str) and difflib.SequenceMatcher(None, lit_val.lower(), cell_v.lower()).ratio() >= 0.72:
+                                    found_col = col
+                                    matched_val = cell_v
+                                    break
+                            if found_col:
                                 break
                         except Exception:
                             pass
@@ -166,6 +178,8 @@ def repair_sql_schema_mismatches(
                     ref_prefix, ref_col = col_ref.split(".")
                     if ref_col.lower() != found_col.lower():
                         sql = re.sub(rf'\b{re.escape(col_ref)}\b', f"{ref_prefix}.{found_col}", sql)
+                    if matched_val and matched_val != lit_val:
+                        sql = sql.replace(f"'{lit_val}'", f"'{matched_val}'")
     except Exception:
         pass
 
@@ -407,19 +421,31 @@ def predict_sql_transformer(
     def ground_literal(match):
         val = match.group(1)
         val_low = val.lower()
-        # Check database values first
+        # 1. Exact match against known database values
         for dv in known_db_values:
             if dv.lower() == val_low:
                 return f"'{dv}'"
+        # 2. Fuzzy match against known database values (catches typos like 'Word Tour 2020' -> 'World Tour 2020')
+        if known_db_values and len(val) >= 3:
+            best_m = None
+            best_s = 0.0
+            for dv in known_db_values:
+                s = difflib.SequenceMatcher(None, val_low, dv.lower()).ratio()
+                if s > best_s:
+                    best_s = s
+                    best_m = dv
+            if best_s >= 0.72 and best_m is not None:
+                return f"'{best_m}'"
+        # 3. Check prefix match (fallback)
+        for dv in known_db_values:
             if len(val_low) >= 4 and len(dv) >= 4 and val_low[:4] == dv.lower()[:4]:
                 return f"'{dv}'"
-        # Check tokens from question
+        # 4. Check tokens from question
         q_words = re.findall(r'\b[a-zA-Z]{3,}\b', question)
         for qw in q_words:
             if len(val_low) >= 4 and len(qw) >= 4 and val_low[:4] == qw.lower()[:4]:
                 return f"'{qw}'"
         return f"'{val}'"
-
     predicted_sql = re.sub(r"'([^']+)'", ground_literal, predicted_sql)
 
     # 5. Schema table name alignment (e.g. FROM student -> FROM students if table is plural/singular)
