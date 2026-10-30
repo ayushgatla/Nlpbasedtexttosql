@@ -193,7 +193,8 @@ def repair_sql_schema_mismatches(
         alias = m.group(2)
         real_tbl = next((t for t in table_names if t.lower() == tbl_name.lower()), tbl_name)
         alias_to_table[alias.upper()] = real_tbl
-        table_to_alias[real_tbl.lower()] = alias.upper()
+        if real_tbl.lower() not in table_to_alias:
+            table_to_alias[real_tbl.lower()] = alias.upper()
         try:
             used_alias_nums.add(int(alias[1:]))
         except Exception:
@@ -205,6 +206,28 @@ def repair_sql_schema_mismatches(
             real_tbl = next((t for t in table_names if t.lower() == tbl_name.lower()), None)
             if real_tbl:
                 table_to_alias[real_tbl.lower()] = real_tbl
+
+    # 2b. Prune redundant self-joins on identical table and key
+    pattern_self = r'\bJOIN\s+([a-zA-Z_]\w*)\s+(?:AS\s+)?(T\d+)\s+ON\s+(?:(T\d+)\.([a-zA-Z_]\w*)\s*=\s*\2\.\4|\2\.([a-zA-Z_]\w*)\s*=\s*(T\d+)\.\5)\b'
+    def repl_self(m):
+        tbl = m.group(1)
+        tj = m.group(2).upper()
+        ti = (m.group(3) or m.group(6)).upper()
+        tbl_j = alias_to_table.get(tj, tbl).lower()
+        tbl_i = alias_to_table.get(ti, '').lower()
+        if tbl_j == tbl_i and tbl_j:
+            return f"__PRUNE_JOIN_{tj}_TO_{ti}__"
+        return m.group(0)
+
+    sql = re.sub(pattern_self, repl_self, sql, flags=re.IGNORECASE)
+    prune_matches = re.findall(r'__PRUNE_JOIN_(T\d+)_TO_(T\d+)__', sql)
+    for tj, ti in prune_matches:
+        sql = sql.replace(f"__PRUNE_JOIN_{tj}_TO_{ti}__", "")
+        sql = re.sub(rf'\b{tj}\.', f"{ti}.", sql)
+        if tj in alias_to_table:
+            real_t = alias_to_table[tj]
+            del alias_to_table[tj]
+            table_to_alias[real_t.lower()] = ti
 
     # 3. Find all column references like T1.ColumnName or Table.ColumnName
     missing_tables_to_add = []
@@ -246,6 +269,30 @@ def repair_sql_schema_mismatches(
         inspect_col_ref,
         sql
     )
+
+    # 3b. Disambiguate unprefixed column references if active aliases exist in query
+    if table_to_alias:
+        sql_keywords = {
+            'SELECT', 'FROM', 'JOIN', 'WHERE', 'GROUP', 'ORDER', 'BY', 'HAVING', 'LIMIT',
+            'OFFSET', 'AS', 'ON', 'AND', 'OR', 'NOT', 'IN', 'IS', 'NULL', 'LIKE', 'BETWEEN',
+            'AVG', 'COUNT', 'SUM', 'MIN', 'MAX', 'DISTINCT', 'ASC', 'DESC', 'CASE', 'WHEN',
+            'THEN', 'ELSE', 'END', 'CAST', 'ROUND', 'TABLE'
+        }
+        def repl_unaliased(m):
+            prefix_char = m.group(1)
+            word = m.group(2)
+            if word.upper() in sql_keywords or word.upper() in alias_to_table:
+                return m.group(0)
+            word_low = word.lower()
+            if word_low in col_to_tables:
+                candidates = col_to_tables[word_low]
+                active_aliases = [table_to_alias[c.lower()] for c in candidates if c.lower() in table_to_alias]
+                if active_aliases:
+                    target_alias = active_aliases[0]
+                    return f"{prefix_char}{target_alias}.{word}"
+            return m.group(0)
+
+        sql_repaired = re.sub(r'(^|[^.\w])([a-zA-Z_]\w*)\b(?!\.)', repl_unaliased, sql_repaired)
 
     # 4. If missing tables were detected, plan and insert foreign key joins
     if missing_tables_to_add:
