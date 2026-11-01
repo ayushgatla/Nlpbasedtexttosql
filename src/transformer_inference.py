@@ -123,6 +123,18 @@ def repair_sql_schema_mismatches(
     if not entry:
         return predicted_sql
 
+    # 0. Handle compound queries (INTERSECT, UNION, EXCEPT) by repairing each branch in its own alias scope
+    compound_pattern = r'(\b(?:INTERSECT|UNION\s+ALL|UNION|EXCEPT)\b)'
+    if re.search(compound_pattern, predicted_sql, re.IGNORECASE):
+        parts = re.split(compound_pattern, predicted_sql, flags=re.IGNORECASE)
+        repaired_parts = []
+        for p in parts:
+            if re.match(r'^\s*(?:INTERSECT|UNION\s+ALL|UNION|EXCEPT)\s*$', p, re.IGNORECASE):
+                repaired_parts.append(p.strip())
+            else:
+                repaired_parts.append(repair_sql_schema_mismatches(p, db_id, tables_list))
+        return " ".join(repaired_parts)
+
     sql = predicted_sql.strip()
 
     # 1. Normalize double quotes around string literals to single quotes
