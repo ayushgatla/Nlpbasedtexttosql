@@ -183,6 +183,40 @@ def repair_sql_schema_mismatches(
     except Exception:
         pass
 
+    valid_tbl_set = set(t.lower() for t in table_names)
+
+    # 1c. Sanitize FROM clause if referencing invalid table or database name
+    m_from = re.search(r'\bFROM\s+([a-zA-Z_]\w*)(\s+(?:AS\s+)?T\d+)?\b', sql, re.IGNORECASE)
+    if m_from:
+        from_tbl = m_from.group(1)
+        if from_tbl.lower() not in valid_tbl_set or from_tbl.lower() == db_id.lower():
+            matched_valid = next((t for t in table_names if t.lower().rstrip("s") == from_tbl.lower().rstrip("s")), None)
+            if not matched_valid:
+                q_cols = re.findall(r'\.([a-zA-Z_]\w*)', sql)
+                if q_cols:
+                    matched_valid = max(table_names, key=lambda t: sum(1 for c in q_cols if c.lower() in table_to_cols.get(t.lower(), {})))
+                else:
+                    matched_valid = table_names[0]
+            if matched_valid:
+                sql = re.sub(rf'\bFROM\s+{re.escape(from_tbl)}\b', f"FROM {matched_valid}", sql, count=1, flags=re.IGNORECASE)
+
+    # 1d. Prune invalid, hallucinated, or dead joins (e.g. JOIN concert_singer AS T2 ON T1.Singer_ID = T1.Singer_ID)
+    join_pattern = r'\bJOIN\s+([a-zA-Z_]\w*)\s+(?:AS\s+)?(T\d+)\s+ON\s+.*?(?=\s+(?:WHERE|JOIN|GROUP\s+BY|ORDER\s+BY|HAVING|LIMIT|$))'
+    for m in list(re.finditer(join_pattern, sql, re.IGNORECASE)):
+        full_join = m.group(0).strip()
+        tbl_raw = m.group(1)
+        alias_raw = m.group(2).upper()
+        
+        is_invalid_tbl = (tbl_raw.lower() not in valid_tbl_set) or (tbl_raw.lower() == db_id.lower())
+        sql_rest = sql.replace(full_join, "")
+        alias_referenced = bool(re.search(rf'\b{alias_raw}\.', sql_rest, re.IGNORECASE))
+        is_tautological = bool(re.search(r'\b(T\d+)\.([a-zA-Z_]\w*)\s*=\s*\1\.\2\b', full_join, re.IGNORECASE))
+        
+        if is_invalid_tbl or (not alias_referenced and is_tautological) or (is_invalid_tbl and not alias_referenced):
+            sql = sql.replace(full_join, "")
+
+    sql = re.sub(r'\s+', ' ', sql).strip()
+
     # 2. Extract existing tables and aliases in FROM / JOIN
     alias_to_table: Dict[str, str] = {}
     table_to_alias: Dict[str, str] = {}
@@ -241,10 +275,7 @@ def repair_sql_schema_mismatches(
         col_low = col_name.lower()
 
         curr_table = alias_to_table.get(prefix_upper) or (prefix if prefix_low in table_to_cols else None)
-        if not curr_table:
-            return full_match
-
-        if col_low in table_to_cols.get(curr_table.lower(), {}):
+        if curr_table and col_low in table_to_cols.get(curr_table.lower(), {}):
             real_col = table_to_cols[curr_table.lower()][col_low]
             return f"{prefix}.{real_col}"
 
