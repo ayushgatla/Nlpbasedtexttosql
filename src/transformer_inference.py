@@ -355,17 +355,39 @@ def predict_sql_transformer(
     device: str = "cpu",
     num_beams: int = 4,
     max_length: int = 128,
-    max_input_len: int = 512
+    max_input_len: int = 512,
+    use_rag: bool = False,
+    rag_context: Optional[Dict[str, Any]] = None
 ) -> str:
     """
     Translates a natural language question into SQL using beam search decoding.
     Accepts either `tokenizer` or `processing_class` for HuggingFace compatibility.
+    When `use_rag=True`, dynamically retrieves in-context demonstrations and prunes
+    irrelevant schema sub-graphs via dense semantic embeddings.
     """
     tk = tokenizer if tokenizer is not None else processing_class
     if tk is None:
         raise ValueError("Either `tokenizer` or `processing_class` must be provided to predict_sql_transformer.")
 
-    prompt = format_seq2seq_prompt(question, db_id, tables_list)
+    if use_rag:
+        try:
+            from src.rag_pipeline import get_rag_pipeline
+            rag = get_rag_pipeline()
+            rag_info = rag.prepare_rag_context(
+                question=question,
+                db_id=db_id,
+                tables_list=tables_list,
+                num_exemplars=2,
+                prune_schema=True
+            )
+            prompt = rag_info["full_prompt"]
+            if rag_context is not None:
+                rag_context.update(rag_info)
+        except Exception:
+            prompt = format_seq2seq_prompt(question, db_id, tables_list)
+    else:
+        prompt = format_seq2seq_prompt(question, db_id, tables_list)
+
     model.eval()
 
     inputs = tk(
