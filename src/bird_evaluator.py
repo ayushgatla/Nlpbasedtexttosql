@@ -13,6 +13,10 @@ import urllib.request
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 
+repo_root = Path(__file__).resolve().parent.parent
+if str(repo_root) not in sys.path:
+    sys.path.append(str(repo_root))
+
 import torch
 from datasets import load_dataset
 
@@ -197,7 +201,8 @@ def run_bird_benchmark_evaluation(
     tokenizer: Any,
     device: str = "cpu",
     sample_size: int = 50,
-    include_evidence: bool = True
+    include_evidence: bool = True,
+    use_rag: bool = True
 ) -> Dict[str, Any]:
     """
     Executes comprehensive BIRD Benchmark evaluation across stratified difficulty tiers.
@@ -275,7 +280,8 @@ def run_bird_benchmark_evaluation(
                 model=model,
                 tokenizer=tokenizer,
                 device=device,
-                num_beams=4
+                num_beams=4,
+                use_rag=use_rag
             )
         except Exception as e:
             pred_sql = f"SELECT error -- {e}"
@@ -350,6 +356,7 @@ if __name__ == "__main__":
     parser.add_argument("--samples", type=int, default=30, help="Number of evaluation samples (default: 30)")
     parser.add_argument("--model", type=str, default="best_model_v2_relational", help="Model path")
     parser.add_argument("--no-evidence", action="store_true", help="Disable domain evidence hints")
+    parser.add_argument("--no-rag", action="store_true", help="Disable RAG pipeline")
     args = parser.parse_args()
 
     from src.transformer_inference import load_transformer_model
@@ -359,6 +366,7 @@ if __name__ == "__main__":
         tokenizer=tok_obj,
         device=dev_str,
         sample_size=args.samples,
-        include_evidence=not args.no_evidence
+        include_evidence=not args.no_evidence,
+        use_rag=not args.no_rag
     )
 
