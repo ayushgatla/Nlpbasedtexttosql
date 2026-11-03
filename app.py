@@ -1,6 +1,6 @@
 """
 NeuroSQL: Dual-Paradigm Cross-Domain NLP Text-to-SQL Studio.
-Clean Academic Interface for Spider Benchmark Evaluation and Custom Database Execution.
+Clean Academic Interface for Natural Language Text-to-SQL Execution.
 """
 
 import sys
@@ -14,7 +14,7 @@ import streamlit as st
 
 # Configure page layout
 st.set_page_config(
-    page_title="NeuroSQL Studio | Spider Benchmark",
+    page_title="NeuroSQL Studio | Text-to-SQL",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -457,8 +457,8 @@ with st.sidebar:
     filtered_presets = [p for p in PRESETS if p["db"] == selected_db]
     preset_choice = None
     if filtered_presets:
-        preset_labels = ["-- Select a benchmark question --"] + [f"[{p['tier']}] {p['question']}" for p in filtered_presets]
-        preset_choice = st.selectbox("Spider Benchmark Presets", preset_labels, index=0)
+        preset_labels = ["-- Select an example question --"] + [f"{p['question']}" for p in filtered_presets]
+        preset_choice = st.selectbox("Example Questions", preset_labels, index=0)
 
     st.markdown("---")
     
@@ -471,9 +471,6 @@ with st.sidebar:
         )
         if target_mode.startswith("Active Database"):
             target_db_name = selected_db
-            curr_tables = list(get_connection_schema(selected_db).get("tables", {}).keys())
-            if curr_tables:
-                st.caption(f"Existing tables in `{selected_db}`: `{', '.join(curr_tables)}`. New tables will be added alongside existing tables without deleting them.")
         else:
             target_db_name = st.text_input("New Database Name", placeholder="e.g. university_db").strip()
 
@@ -491,17 +488,11 @@ INSERT INTO courses VALUES
     (102, 'Calculus III', 'Mathematics', 4);"""
             custom_sql_input = st.text_area("SQL Schema & Insert Statements", value=default_sql_template, height=180)
 
-            c_btn1, c_btn2 = st.columns([3, 2])
-            with c_btn1:
-                submit_sql = st.button("Execute & Add Table(s)")
-            with c_btn2:
-                overwrite_all = st.checkbox("Wipe & recreate DB", value=False, help="Check only if you want to completely erase the entire database before inserting.")
-
-            if submit_sql:
+            if st.button("Execute & Add Table(s)"):
                 if not target_db_name:
                     st.error("Please provide a database name.")
                 else:
-                    success, msg, all_tbls = register_custom_sql_database(target_db_name, custom_sql_input, overwrite_db=overwrite_all)
+                    success, msg, all_tbls = register_custom_sql_database(target_db_name, custom_sql_input)
                     if success:
                         if msg not in st.session_state.custom_dbs:
                             st.session_state.custom_dbs.append(msg)
@@ -525,19 +516,13 @@ INSERT INTO courses VALUES
 }"""
             custom_json_input = st.text_area("JSON Schema Structure", value=default_json_template, height=200)
 
-            c_btn1, c_btn2 = st.columns([3, 2])
-            with c_btn1:
-                submit_json = st.button("Execute & Add Table(s) from JSON")
-            with c_btn2:
-                overwrite_all_json = st.checkbox("Wipe & recreate DB", value=False, key="chk_json_wipe")
-
-            if submit_json:
+            if st.button("Execute & Add Table(s) from JSON"):
                 if not target_db_name:
                     st.error("Please provide a database name.")
                 else:
                     try:
                         parsed_json = json.loads(custom_json_input)
-                        success, msg, all_tbls = register_custom_json_database(target_db_name, parsed_json, overwrite_db=overwrite_all_json)
+                        success, msg, all_tbls = register_custom_json_database(target_db_name, parsed_json)
                         if success:
                             if msg not in st.session_state.custom_dbs:
                                 st.session_state.custom_dbs.append(msg)
@@ -599,7 +584,7 @@ if "user_query" not in st.session_state:
 
 default_question = st.session_state.user_query
 active_preset = None
-if preset_choice and preset_choice != "-- Select a benchmark question --":
+if preset_choice and preset_choice != "-- Select an example question --":
     sel_idx = preset_labels.index(preset_choice) - 1
     active_preset = filtered_presets[sel_idx]
     default_question = active_preset["question"]
@@ -872,521 +857,61 @@ if run_button or user_query:
                 st.caption(f"Embedding Retrieval: sentence-transformers/all-MiniLM-L6-v2 | Latency: <15ms")
 
     st.markdown("---")
-    st.markdown("### Architecture Comparison")
-    
-    col1, col2 = st.columns(2)
-    
-    # Column 1: Modular Neural-Symbolic IR
-    with col1:
-        st.markdown('<div class="panel-card">', unsafe_allow_html=True)
-        st.markdown('<div class="card-title">Modular Neural-Symbolic IR</div>', unsafe_allow_html=True)
-        st.markdown('<div><span class="stat-badge">Dense MiniLM + BFS Graph</span><span class="stat-badge">Overall AST: 9.0% | Easy: 66.7%</span></div>', unsafe_allow_html=True)
-        
-        st.caption("Intermediate Representation (IR Structure):")
-        st.json({
-            "Main Table": ir_data.get("main_table"),
-            "Projections": ir_data.get("select", []),
-            "Aggregations": [f"{f}({c})" for f, c in ir_data.get("aggregations", [])],
-            "Joins": [j.get("condition") for j in ir_data.get("joins", [])],
-            "Filters": [f"{w.get('column')} {w.get('operator')} {w.get('value')}" for w in ir_data.get("where", [])]
-        })
-        
-        st.caption("Synthesized SQL Query:")
-        st.markdown(f'<div class="sql-code-box">{ir_sql}</div>', unsafe_allow_html=True)
-        
-        # SQLite Execution
-        headers_ir, rows_ir, err_ir = execute_sql(selected_db, ir_sql)
-        st.caption("SQLite Execution Output:")
-        if err_ir:
-            st.error(f"SQL Execution Error: {err_ir}")
-        elif rows_ir is not None and headers_ir is not None:
-            if not rows_ir:
-                st.info("Query executed successfully. 0 rows returned.")
-            else:
-                table_html = "<table class='data-table'><thead><tr>"
-                for h in headers_ir:
-                    table_html += f"<th>{h}</th>"
-                table_html += "</tr></thead><tbody>"
-                for r in rows_ir[:8]:
-                    table_html += "<tr>" + "".join(f"<td>{val}</td>" for val in r) + "</tr>"
-                table_html += "</tbody></table>"
-                st.markdown(table_html, unsafe_allow_html=True)
-                st.caption(f"Returned {len(rows_ir)} row(s).")
-                
-        st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown("### Generated SQL & Query Execution")
 
-    # Column 2: Fine-Tuned Flan-T5 Seq2Seq
-    with col2:
-        st.markdown('<div class="panel-card">', unsafe_allow_html=True)
-        st.markdown('<div class="card-title">Fine-Tuned Flan-T5 Seq2Seq</div>', unsafe_allow_html=True)
-        badge_rag = '<span class="stat-badge">Generative Transformer + RAG</span><span class="stat-badge">Overall AST: 80%+ | Multi-Join: 85%+</span>' if enable_rag else '<span class="stat-badge">Generative Transformer</span><span class="stat-badge">Overall AST: 40.0% | Easy: 100.0%</span>'
-        st.markdown(f'<div>{badge_rag}</div>', unsafe_allow_html=True)
-        
-        if enable_rag and rag_info.get("full_prompt"):
-            st.caption("RAG-Augmented Input Sequence:")
-            st.code(rag_info["full_prompt"], language="text")
+    st.caption("Synthesized SQL Query:")
+    st.markdown(f'<div class="sql-code-box">{t5_sql}</div>', unsafe_allow_html=True)
+
+    headers_t5, rows_t5, err_t5 = execute_sql(selected_db, t5_sql)
+    st.caption("SQLite Execution Output:")
+    if err_t5:
+        st.error(f"SQL Execution Error: {err_t5}")
+    elif rows_t5 is not None and headers_t5 is not None:
+        if not rows_t5:
+            st.info("Query executed successfully. 0 rows returned.")
         else:
-            st.caption("Input Sequence Serialization:")
-            schema_summary = " | ".join(f"{t} ( {', '.join(c)} )" for t, c in list(schema_tables.items())[:3])
-            st.code(f"Translate to SQL: {user_query} | Database: {selected_db} | Tables: {schema_summary}", language="text")
-        
-        st.caption("Decoded SQL Query (Beam Search, Beams=4):")
-        st.markdown(f'<div class="sql-code-box">{t5_sql}</div>', unsafe_allow_html=True)
-        
-        # SQLite Execution
-        headers_t5, rows_t5, err_t5 = execute_sql(selected_db, t5_sql)
-        st.caption("SQLite Execution Output:")
-        if err_t5:
-            st.error(f"SQL Execution Error: {err_t5}")
-        elif rows_t5 is not None and headers_t5 is not None:
-            if not rows_t5:
-                st.info("Query executed successfully. 0 rows returned.")
-            else:
-                table_html = "<table class='data-table'><thead><tr>"
-                for h in headers_t5:
-                    table_html += f"<th>{h}</th>"
-                table_html += "</tr></thead><tbody>"
-                for r in rows_t5[:8]:
-                    table_html += "<tr>" + "".join(f"<td>{val}</td>" for val in r) + "</tr>"
-                table_html += "</tbody></table>"
-                st.markdown(table_html, unsafe_allow_html=True)
-                st.caption(f"Returned {len(rows_t5)} row(s).")
-                
-        st.markdown('</div>', unsafe_allow_html=True)
+            table_html = "<div style='overflow-x: auto; margin-top: 0.5rem;'><table class='data-table'><thead><tr>"
+            for h in headers_t5:
+                table_html += f"<th>{h}</th>"
+            table_html += "</tr></thead><tbody>"
+            for r in rows_t5[:25]:
+                table_html += "<tr>" + "".join(f"<td>{val}</td>" for val in r) + "</tr>"
+            table_html += "</tbody></table></div>"
+            st.markdown(table_html, unsafe_allow_html=True)
+            st.caption(f"Returned {len(rows_t5)} row(s).")
 
-# Official Spider Benchmark Reports Section & Testing Lab
+# Live Database Table Inspector
 st.markdown("---")
-st.markdown("### Benchmark & Testing Suite")
+st.markdown("### Live Database Table Inspector")
+st.caption(f"Viewing live tables and data in active database: `{selected_db}`")
 
-DATABASE_DDL = {
-    "students": {
-        "title": "University Academic Schema",
-        "domain": "Higher Education & Academic Enrollment",
-        "description": "Multi-table relational schema tracking students, academic majors, course catalogs, and enrollment grades.",
-        "sql": """CREATE TABLE students (
-    student_id INTEGER PRIMARY KEY,
-    name TEXT,
-    age INTEGER,
-    major TEXT
-);
-INSERT INTO students VALUES 
-    (1, 'Alice Smith', 20, 'Computer Science'),
-    (2, 'Bob Jones', 22, 'Mathematics'),
-    (3, 'Charlie Brown', 21, 'Physics');
+lab_conn = DB_CONNECTIONS.get(selected_db)
+if lab_conn:
+    lab_cur = lab_conn.cursor()
+    lab_cur.execute("SELECT name FROM sqlite_master WHERE type='table';")
+    tbl_list = [r[0] for r in lab_cur.fetchall() if r[0] != "sqlite_sequence"]
 
-CREATE TABLE courses (
-    course_id INTEGER PRIMARY KEY,
-    course_name TEXT,
-    department TEXT,
-    credits INTEGER
-);
-INSERT INTO courses VALUES
-    (101, 'Algorithms', 'Computer Science', 4),
-    (102, 'Calculus III', 'Mathematics', 4),
-    (103, 'Quantum Physics', 'Physics', 3);
-
-CREATE TABLE enrollments (
-    enrollment_id INTEGER PRIMARY KEY,
-    student_id INTEGER,
-    course_id INTEGER,
-    grade TEXT,
-    FOREIGN KEY (student_id) REFERENCES students(student_id),
-    FOREIGN KEY (course_id) REFERENCES courses(course_id)
-);
-INSERT INTO enrollments VALUES
-    (1, 1, 101, 'A'),
-    (2, 2, 102, 'A-'),
-    (3, 3, 103, 'B+');"""
-    },
-    "hotel": {
-        "title": "Hotel Management Schema",
-        "domain": "Hospitality Operations, Staff & Room Inventory",
-        "description": "Enterprise schema recording hotel staff roles, employee compensation, and room rates/availability.",
-        "sql": """CREATE TABLE hotel (
-    id INTEGER PRIMARY KEY,
-    name TEXT,
-    age INTEGER,
-    role TEXT,
-    salary INTEGER
-);
-INSERT INTO hotel VALUES 
-    (1, 'John Doe', 42, 'manager', 85000),
-    (2, 'Jane Doe', 28, 'receptionist', 45000),
-    (3, 'Sam Wilson', 35, 'chef', 60000),
-    (4, 'Emily Watson', 24, 'concierge', 40000);
-
-CREATE TABLE rooms (
-    room_no INTEGER PRIMARY KEY,
-    room_type TEXT,
-    price_per_night REAL,
-    status TEXT
-);
-INSERT INTO rooms VALUES
-    (101, 'Deluxe Suite', 250.0, 'Occupied'),
-    (102, 'Standard King', 150.0, 'Available'),
-    (103, 'Executive Suite', 320.0, 'Occupied');"""
-    },
-    "ecommerce": {
-        "title": "E-Commerce & Retail Store",
-        "domain": "Online Retail, Product Catalog & Customer Orders",
-        "description": "Retail e-commerce schema tracking customer accounts, product inventories, and multi-item orders.",
-        "sql": """CREATE TABLE customers (
-    customer_id INTEGER PRIMARY KEY,
-    name TEXT,
-    email TEXT,
-    city TEXT
-);
-INSERT INTO customers VALUES
-    (1, 'Sarah Connor', 'sarah@example.com', 'Los Angeles'),
-    (2, 'John Connor', 'john@example.com', 'New York'),
-    (3, 'Kyle Reese', 'kyle@example.com', 'Chicago');
-
-CREATE TABLE products (
-    product_id INTEGER PRIMARY KEY,
-    product_name TEXT,
-    category TEXT,
-    price REAL,
-    stock INTEGER
-);
-INSERT INTO products VALUES
-    (1, 'MacBook Pro', 'Electronics', 1999.99, 25),
-    (2, 'Wireless Headphones', 'Electronics', 199.99, 100),
-    (3, 'Ergonomic Desk Chair', 'Furniture', 349.50, 15);
-
-CREATE TABLE orders (
-    order_id INTEGER PRIMARY KEY,
-    customer_id INTEGER,
-    product_id INTEGER,
-    quantity INTEGER,
-    order_date TEXT,
-    FOREIGN KEY (customer_id) REFERENCES customers(customer_id),
-    FOREIGN KEY (product_id) REFERENCES products(product_id)
-);
-INSERT INTO orders VALUES
-    (1, 1, 1, 1, '2024-01-15'),
-    (2, 2, 2, 2, '2024-02-10'),
-    (3, 3, 3, 1, '2024-03-01');"""
-    },
-    "company": {
-        "title": "Corporate Enterprise & HR",
-        "domain": "Corporate Structure, Payroll & Departments",
-        "description": "Human resources database recording department budgets, office locations, and employee compensation.",
-        "sql": """CREATE TABLE departments (
-    dept_id INTEGER PRIMARY KEY,
-    dept_name TEXT,
-    budget INTEGER,
-    location TEXT
-);
-INSERT INTO departments VALUES
-    (1, 'Engineering', 1200000, 'San Francisco'),
-    (2, 'Marketing', 450000, 'New York'),
-    (3, 'Finance', 600000, 'Chicago');
-
-CREATE TABLE employees (
-    emp_id INTEGER PRIMARY KEY,
-    name TEXT,
-    dept_id INTEGER,
-    salary INTEGER,
-    hire_year INTEGER,
-    FOREIGN KEY (dept_id) REFERENCES departments(dept_id)
-);
-INSERT INTO employees VALUES
-    (101, 'Alex Rivera', 1, 135000, 2020),
-    (102, 'Jessica Chen', 1, 145000, 2019),
-    (103, 'David Kim', 2, 92000, 2021),
-    (104, 'Maria Garcia', 3, 105000, 2018);"""
-    },
-    "concert_singer": {
-        "title": "Yale Spider: Concert & Singer",
-        "domain": "Music Industry & Stadium Tours",
-        "description": "Benchmark Spider dataset linking world-tour concerts, stadium seating capacities, and performing artists.",
-        "sql": """CREATE TABLE stadium (
-    Stadium_ID INTEGER PRIMARY KEY,
-    Location TEXT,
-    Name TEXT,
-    Capacity INTEGER,
-    Highest INTEGER,
-    Lowest INTEGER,
-    Average INTEGER
-);
-INSERT INTO stadium VALUES 
-    (1, 'London', 'Wembley Arena', 90000, 89000, 75000, 82000),
-    (2, 'Manchester', 'Old Trafford', 75000, 74000, 68000, 71000),
-    (3, 'Paris', 'Stade de France', 81000, 80000, 72000, 76000),
-    (4, 'Berlin', 'Olympiastadion', 74000, 73000, 65000, 69000);
-
-CREATE TABLE singer (
-    Singer_ID INTEGER PRIMARY KEY,
-    Name TEXT,
-    Country TEXT,
-    Song_Name TEXT,
-    Song_release_year INTEGER,
-    Age INTEGER,
-    Is_male INTEGER
-);
-INSERT INTO singer VALUES
-    (1, 'Adele Adkins', 'France', 'Rolling in the Deep', 2010, 34, 0),
-    (2, 'Ed Sheeran', 'United Kingdom', 'Shape of You', 2017, 32, 1),
-    (3, 'Dua Lipa', 'United Kingdom', 'Levitating', 2020, 27, 0),
-    (4, 'Stromae', 'France', 'Papaoutai', 2013, 38, 1),
-    (5, 'Billie Eilish', 'United States', 'Bad Guy', 2019, 21, 0),
-    (6, 'The Weeknd', 'Canada', 'Blinding Lights', 2019, 33, 1);"""
-    },
-    "pets_1": {
-        "title": "Yale Spider: Pets & Students",
-        "domain": "Student Housing & Domestic Pets",
-        "description": "Benchmark Spider dataset linking college students, pet ownership records, and animal weights.",
-        "sql": """CREATE TABLE Student (
-    StuID INTEGER PRIMARY KEY,
-    LName TEXT,
-    Fname TEXT,
-    Age INTEGER,
-    Sex TEXT,
-    Major TEXT,
-    Advisor INTEGER,
-    city_code TEXT
-);
-INSERT INTO Student VALUES
-    (101, 'Smith', 'Linda', 21, 'F', 'CS', 1, 'NYC'),
-    (102, 'Johnson', 'Mark', 23, 'M', 'Math', 2, 'BOS'),
-    (103, 'Williams', 'Sarah', 20, 'F', 'Biology', 1, 'CHI'),
-    (104, 'Brown', 'David', 22, 'M', 'CS', 3, 'NYC');
-
-CREATE TABLE Pets (
-    PetID INTEGER PRIMARY KEY,
-    PetType TEXT,
-    PetAge INTEGER,
-    Weight REAL
-);
-INSERT INTO Pets VALUES
-    (1, 'Dog', 4, 25.5),
-    (2, 'Cat', 2, 8.2),
-    (3, 'Bird', 1, 0.5),
-    (4, 'Dog', 7, 32.0);"""
-    },
-    "car_1": {
-        "title": "Yale Spider: Automotive & Cars",
-        "domain": "Automotive Engineering & Specs",
-        "description": "Benchmark Spider dataset measuring engine cylinders, horsepower, MPG efficiency, and automaker origins.",
-        "sql": """CREATE TABLE car_makers (
-    Id INTEGER PRIMARY KEY,
-    Maker TEXT,
-    FullName TEXT,
-    Country TEXT
-);
-INSERT INTO car_makers VALUES 
-    (1, 'Ford', 'Ford Motor Co', 'USA'), 
-    (2, 'BMW', 'Bayerische Motoren Werke', 'Germany'), 
-    (3, 'Toyota', 'Toyota Motor Corp', 'Japan');
-
-CREATE TABLE cars_data (
-    Id INTEGER PRIMARY KEY,
-    MPG REAL,
-    Cylinders INTEGER,
-    Edispl REAL,
-    Horsepower INTEGER,
-    Weight REAL,
-    Accelerate REAL,
-    Year INTEGER
-);
-INSERT INTO cars_data VALUES 
-    (1, 18.0, 8, 307.0, 130, 3504, 12.0, 1970),
-    (2, 24.0, 4, 113.0, 95, 2372, 15.0, 1970),
-    (3, 27.0, 4, 97.0, 88, 2130, 14.5, 1971),
-    (4, 14.0, 8, 455.0, 225, 4425, 10.0, 1970);"""
-    }
-}
-
-BENCHMARK_TEST_SUITE = {
-    "students": [
-        {"tier": "Easy", "question": "Show the names and majors of all students.", "focus": "Projection (2 Columns)"},
-        {"tier": "Easy", "question": "Show all students whose age is greater than 20.", "focus": "Numeric Filter (>)"},
-        {"tier": "Medium", "question": "give me names of students which did not take mathematics", "focus": "Negation Filter (!=)"},
-        {"tier": "Medium", "question": "What is the average age of all students?", "focus": "Aggregation (AVG)"},
-        {"tier": "Medium", "question": "Show the names of students whose major is Physics.", "focus": "Exact Text Match (=)"},
-        {"tier": "Hard", "question": "Show the student name and course name for all enrollments with grade A", "focus": "Multi-Table Relational Join"}
-    ],
-    "hotel": [
-        {"tier": "Easy", "question": "give me the name of the person with the role of manager in the hotel", "focus": "Exact Categorical Role"},
-        {"tier": "Easy", "question": "Show all rooms with status Available", "focus": "Status Filter"},
-        {"tier": "Medium", "question": "Show names and salaries of employees who are not manager", "focus": "Negation Filter (!=)"},
-        {"tier": "Medium", "question": "What is the average salary of employees in the hotel?", "focus": "Aggregation (AVG)"},
-        {"tier": "Hard", "question": "Show the room number and price for all rooms that cost more than 200", "focus": "Numeric Filter (>)"}
-    ],
-    "ecommerce": [
-        {"tier": "Easy", "question": "Show all products in the Electronics category", "focus": "Category Filter (=)"},
-        {"tier": "Easy", "question": "Show the names and emails of all customers from Chicago", "focus": "Location Filter (=)"},
-        {"tier": "Medium", "question": "How many products have price greater than 300?", "focus": "Count Filter (COUNT WHERE)"},
-        {"tier": "Medium", "question": "Show all products that are not Electronics", "focus": "Negation Filter (!=)"},
-        {"tier": "Hard", "question": "Show customer name, product name, and order quantity for all orders", "focus": "3-Table Join"}
-    ],
-    "company": [
-        {"tier": "Easy", "question": "Show the names and salaries of all employees", "focus": "Projection"},
-        {"tier": "Easy", "question": "Show the department name with budget greater than 500000", "focus": "Numeric Filter (>)"},
-        {"tier": "Medium", "question": "What is the highest salary among all employees?", "focus": "Aggregation (MAX)"},
-        {"tier": "Medium", "question": "Show employees who do not belong to department 2", "focus": "Negation Filter (!=)"},
-        {"tier": "Hard", "question": "Show employee name, department name, and department location", "focus": "Foreign Key Join"}
-    ],
-    "concert_singer": [
-        {"tier": "Easy", "question": "How many singers do we have?", "focus": "Aggregation (COUNT)"},
-        {"tier": "Medium", "question": "Show name, country, age for all singers ordered by age from the oldest to the youngest.", "focus": "Sorting (ORDER BY DESC)"},
-        {"tier": "Medium", "question": "What is the average, minimum, and maximum age of all singers from France?", "focus": "Multi-Aggregation Filter"},
-        {"tier": "Hard", "question": "Show the name and release year of the song by the youngest singer.", "focus": "Subquery (MIN)"}
-    ],
-    "pets_1": [
-        {"tier": "Easy", "question": "Show first and last names of all female students", "focus": "Text Filter (=)"},
-        {"tier": "Medium", "question": "What is the maximum weight of all dogs?", "focus": "Aggregation WHERE"},
-        {"tier": "Hard", "question": "What is the first and last name of the student who has a dog?", "focus": "3-Way Multi-Hop Join"}
-    ],
-    "car_1": [
-        {"tier": "Easy", "question": "How many car makers are there in the USA?", "focus": "COUNT WHERE"},
-        {"tier": "Medium", "question": "Show all cars with horsepower greater than 150", "focus": "Numeric Filter (>)"},
-        {"tier": "Hard", "question": "What is the average MPG for cars with 8 cylinders?", "focus": "AVG WHERE"}
-    ]
-}
-
-tab_test, tab1, tab2, tab3, tab4 = st.tabs([
-    "Testing Lab & Benchmarks",
-    "Progression Matrix",
-    "Difficulty Stratification",
-    "Schema Linking Ablation",
-    "Error Taxonomy"
-])
-
-with tab_test:
-    st.markdown("#### Cross-Domain Testing & Evaluation Lab")
-    st.markdown("Select any pre-configured database below to inspect its **DDL / DML creation scripts**, explore live SQLite rows, and run **curated benchmark queries** across difficulty tiers.")
-
-    lab_db_keys = list(DATABASE_DDL.keys())
-    sel_lab_db = st.selectbox(
-        "Select Database to Inspect:",
-        lab_db_keys,
-        format_func=lambda k: f"{DATABASE_DDL[k]['title']} [{k}]",
-        index=lab_db_keys.index(st.session_state.get("selected_db", "students")) if st.session_state.get("selected_db") in lab_db_keys else 0
-    )
-
-    db_meta = DATABASE_DDL[sel_lab_db]
-    st.markdown(f"**Domain:** `{db_meta['domain']}` | {db_meta['description']}")
-
-    # 1. Table Creation Code with Values Entered
-    with st.expander("Table Creation SQL Script (DDL & Insert Statements with Values)", expanded=False):
-        st.code(db_meta["sql"], language="sql")
-
-    # 2. Live SQLite Table Viewer (Sub-tabs for full width and zero column collision)
-    with st.expander("Live Database Table Inspector", expanded=True):
-        lab_conn = DB_CONNECTIONS.get(sel_lab_db)
-        if lab_conn:
-            lab_cur = lab_conn.cursor()
-            lab_cur.execute("SELECT name FROM sqlite_master WHERE type='table';")
-            tbl_list = [r[0] for r in lab_cur.fetchall() if r[0] != "sqlite_sequence"]
-            
-            if tbl_list:
-                table_subtabs = st.tabs([f"Table: {tbl}" for tbl in tbl_list])
-                for subtab, tbl in zip(table_subtabs, tbl_list):
-                    with subtab:
-                        h_tbl, r_tbl, _ = execute_sql(sel_lab_db, f"SELECT * FROM {tbl} LIMIT 10")
-                        if h_tbl and r_tbl:
-                            t_html = "<div style='overflow-x: auto; margin-top: 0.5rem;'><table class='data-table'><thead><tr>"
-                            for h in h_tbl:
-                                t_html += f"<th>{h}</th>"
-                            t_html += "</tr></thead><tbody>"
-                            for row in r_tbl:
-                                t_html += "<tr>" + "".join(f"<td>{v}</td>" for v in row) + "</tr>"
-                            t_html += "</tbody></table></div>"
-                            st.markdown(t_html, unsafe_allow_html=True)
-                            st.caption(f"Showing up to 10 rows from '{tbl}' ({len(h_tbl)} columns)")
-                        else:
-                            st.caption("No rows found in this table.")
-            else:
-                st.caption("No tables detected in active connection.")
-        else:
-            st.warning(f"Database '{sel_lab_db}' is not loaded in SQLite.")
-
-    # 3. Curated Benchmark Questions for this Database
-    st.markdown("#### Curated Benchmark Questions")
-    st.caption("Click 'Run Query' next to any benchmark question to load it into the studio and execute live comparison.")
-
-    db_questions = BENCHMARK_TEST_SUITE.get(sel_lab_db, [])
-    
-    tier_groups = {
-        "[Easy] Single-Table Projections & Filters": [q for q in db_questions if q["tier"] == "Easy"],
-        "[Medium] Aggregations, Counts & Negation Filters": [q for q in db_questions if q["tier"] == "Medium"],
-        "[Hard] Multi-Table Joins & Relational Graphs": [q for q in db_questions if q["tier"] == "Hard"]
-    }
-
-    for group_name, q_list in tier_groups.items():
-        if q_list:
-            st.markdown(f"##### {group_name}")
-            for idx, item in enumerate(q_list):
-                q_col1, q_col2 = st.columns([5, 1])
-                with q_col1:
-                    st.markdown(f"**{item['question']}**")
-                    st.caption(f"Target: `{item['focus']}` | Database: `{sel_lab_db}`")
-                with q_col2:
-                    if st.button("Run Query", key=f"btn_test_{sel_lab_db}_{idx}_{item['tier']}"):
-                        st.session_state.selected_db = sel_lab_db
-                        st.session_state.user_query = item["question"]
-                        st.rerun()
-                st.markdown("<hr style='margin: 0.35rem 0; border-color: #1f2937;'/>", unsafe_allow_html=True)
-
-
-with tab1:
-    st.markdown("#### Architectural Milestone Progression (Spider Benchmark)")
-    prog_data = [
-        {"Stage": "1. Rule Baseline", "Paradigm": "Deterministic Regex Slots", "Easy Match": "12.5%", "Overall AST": "1.0%", "Bottleneck": "Rigid pattern collisions on novel phrasing"},
-        {"Stage": "2. TF-IDF + IR", "Paradigm": "Lexical Schema Matching + IR", "Easy Match": "33.3%", "Overall AST": "4.0%", "Bottleneck": "Dropped synonyms and vocabulary mismatch"},
-        {"Stage": "3. MiniLM + BFS IR", "Paradigm": "Neural-Symbolic Hybrid", "Easy Match": "66.7%", "Overall AST": "9.0%", "Bottleneck": "Inability to parse recursive subqueries"},
-        {"Stage": "4. Fine-Tuned Flan-T5", "Paradigm": "Generative Seq2Seq Transformer", "Easy Match": "100.0%", "Overall AST": "40.0%", "Bottleneck": "4.4x overall improvement; end-to-end alias and subquery generation"}
-    ]
-    p_html = "<table class='data-table'><thead><tr><th>Stage</th><th>Paradigm</th><th>Easy Match</th><th>Overall AST</th><th>Primary Bottleneck / Finding</th></tr></thead><tbody>"
-    for row in prog_data:
-        p_html += f"<tr><td><b>{row['Stage']}</b></td><td>{row['Paradigm']}</td><td>{row['Easy Match']}</td><td><b>{row['Overall AST']}</b></td><td>{row['Bottleneck']}</td></tr>"
-    p_html += "</tbody></table>"
-    st.markdown(p_html, unsafe_allow_html=True)
-
-with tab2:
-    st.markdown("#### Fine-Tuned Flan-T5 AST Match on Held-Out `dev.json` (100 Unseen Queries)")
-    strat_data = [
-        {"Tier": "Easy", "Correct": 12, "Total": 12, "Accuracy": "100.00%"},
-        {"Tier": "Medium", "Correct": 20, "Total": 50, "Accuracy": "40.00%"},
-        {"Tier": "Hard", "Correct": 7, "Total": 21, "Accuracy": "33.33%"},
-        {"Tier": "Extra Hard", "Correct": 1, "Total": 17, "Accuracy": "5.88%"},
-        {"Tier": "OVERALL", "Correct": 40, "Total": 100, "Accuracy": "40.00%"}
-    ]
-    s_html = "<table class='data-table'><thead><tr><th>Difficulty Tier</th><th>Correct</th><th>Total</th><th>Accuracy (%)</th></tr></thead><tbody>"
-    for r in strat_data:
-        bold_tag = "<b>" if r["Tier"] in ["Easy", "OVERALL"] else ""
-        end_bold = "</b>" if r["Tier"] in ["Easy", "OVERALL"] else ""
-        s_html += f"<tr><td>{bold_tag}{r['Tier']}{end_bold}</td><td>{r['Correct']}</td><td>{r['Total']}</td><td>{bold_tag}{r['Accuracy']}{end_bold}</td></tr>"
-    s_html += "</tbody></table>"
-    st.markdown(s_html, unsafe_allow_html=True)
-
-with tab3:
-    st.markdown("#### Schema Linking Ablation Study (Recall@K)")
-    ablation_data = [
-        {"Strategy": "Lexical Only (Word Overlap)", "Recall@1": "35.2%", "Recall@3": "54.1%", "Recall@5": "66.7%", "Recall@10": "78.2%"},
-        {"Strategy": "Dense Only (MiniLM Embeddings)", "Recall@1": "44.8%", "Recall@3": "64.3%", "Recall@5": "75.6%", "Recall@10": "88.9%"},
-        {"Strategy": "Hybrid (Dense + Lexical Boost)", "Recall@1": "52.6%", "Recall@3": "71.9%", "Recall@5": "80.4%", "Recall@10": "95.4%"}
-    ]
-    a_html = "<table class='data-table'><thead><tr><th>Schema Linking Strategy</th><th>Recall@1</th><th>Recall@3</th><th>Recall@5</th><th>Recall@10</th></tr></thead><tbody>"
-    for r in ablation_data:
-        a_html += f"<tr><td><b>{r['Strategy']}</b></td><td>{r['Recall@1']}</td><td>{r['Recall@3']}</td><td>{r['Recall@5']}</td><td><b>{r['Recall@10']}</b></td></tr>"
-    a_html += "</tbody></table>"
-    st.markdown(a_html, unsafe_allow_html=True)
-
-with tab4:
-    st.markdown("#### Automated Error Taxonomy & Qualitative Breakdown")
-    tax_data = [
-        {"Category": "Top-1 Schema Linking Miss", "Share": "50.0%", "Description": "Ambiguous column reference selects wrong table as root entity."},
-        {"Category": "Join Disconnection", "Share": "22.0%", "Description": "Schema metadata lacks explicit foreign key constraints across junction tables."},
-        {"Category": "Subquery & Set Complexity", "Share": "19.0%", "Description": "Query requires nested subquery or set operation not expressible in flat IR slots."},
-        {"Category": "Exact AST Match", "Share": "9.0%", "Description": "Fully correct semantic translation verified by official Spider AST parser."}
-    ]
-    t_html = "<table class='data-table'><thead><tr><th>Failure Mode Category</th><th>Share (%)</th><th>Description</th></tr></thead><tbody>"
-    for r in tax_data:
-        t_html += f"<tr><td><b>{r['Category']}</b></td><td>{r['Share']}</td><td>{r['Description']}</td></tr>"
-    t_html += "</tbody></table>"
-    st.markdown(t_html, unsafe_allow_html=True)
+    if tbl_list:
+        table_subtabs = st.tabs([f"Table: {tbl}" for tbl in tbl_list])
+        for subtab, tbl in zip(table_subtabs, tbl_list):
+            with subtab:
+                h_tbl, r_tbl, _ = execute_sql(selected_db, f"SELECT * FROM {tbl} LIMIT 25")
+                if h_tbl and r_tbl:
+                    t_html = "<div style='overflow-x: auto; margin-top: 0.5rem;'><table class='data-table'><thead><tr>"
+                    for h in h_tbl:
+                        t_html += f"<th>{h}</th>"
+                    t_html += "</tr></thead><tbody>"
+                    for row in r_tbl:
+                        t_html += "<tr>" + "".join(f"<td>{v}</td>" for v in row) + "</tr>"
+                    t_html += "</tbody></table></div>"
+                    st.markdown(t_html, unsafe_allow_html=True)
+                    st.caption(f"Showing up to 25 rows from '{tbl}' ({len(h_tbl)} columns)")
+                else:
+                    st.caption("No rows found in this table.")
+    else:
+        st.info("No tables detected in active connection.")
+else:
+    st.warning(f"Database '{selected_db}' is not loaded in SQLite.")
 
 st.markdown("---")
-st.caption("Capstone Project: Advanced Natural Language Processing (NLP) Text-to-SQL Studio | Cross-Domain Spider Benchmark")
+st.caption("NeuroSQL Studio | Text-to-SQL Execution Engine")
