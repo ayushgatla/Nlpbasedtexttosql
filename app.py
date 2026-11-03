@@ -808,15 +808,15 @@ if run_button or user_query:
         t5_sql = ir_sql
 
     if enable_rag and rag_info:
-        with st.expander("⚡ RAG Context & Dense Retrieval Engine", expanded=True):
+        with st.expander("RAG Context & Dense Retrieval Engine", expanded=True):
             rcol1, rcol2 = st.columns([1, 1])
             with rcol1:
-                st.markdown("**🔍 Top In-Context Spider Demonstrations**")
+                st.markdown("**Top In-Context Spider Demonstrations**")
                 for ex in rag_info.get("exemplars", []):
                     st.markdown(f"- **Sim: `{ex['score']}`** ({ex.get('db_id', '')}): *{ex['question']}*")
                     st.code(ex["sql"], language="sql")
             with rcol2:
-                st.markdown("**🎯 Schema Sub-Graph Pruning**")
+                st.markdown("**Schema Sub-Graph Pruning**")
                 p_stats = rag_info.get("pruning_stats", {})
                 st.write(f"**Kept Tables:** `{', '.join(p_stats.get('kept_tables', []))}`")
                 if p_stats.get("pruned_tables"):
