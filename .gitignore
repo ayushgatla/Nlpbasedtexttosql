@@ -35,3 +35,5 @@ data/unified/cache/
 documentation_pdfs/
 
 data/wikisql/
+data/custom_dbs/*.sqlite
+data/custom_dbs/*.db

@@ -4,8 +4,15 @@ Initializes realistic in-memory SQLite databases for Spider benchmarks
 using Python's standard library sqlite3 without external DLL dependencies.
 """
 
+import os
+import re
 import sqlite3
+from pathlib import Path
 from typing import Dict, Any, Tuple, Optional, List
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+CUSTOM_DB_DIR = REPO_ROOT / "data" / "custom_dbs"
+CUSTOM_DB_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def create_sample_databases() -> Dict[str, sqlite3.Connection]:
@@ -314,6 +321,16 @@ def create_sample_databases() -> Dict[str, sqlite3.Connection]:
     comp_conn.commit()
     connections["company"] = comp_conn
 
+    # 8. Load persistent user custom databases from data/custom_dbs
+    if CUSTOM_DB_DIR.exists():
+        for db_file in sorted(CUSTOM_DB_DIR.glob("*.sqlite")):
+            db_id = db_file.stem
+            try:
+                c_conn = sqlite3.connect(str(db_file), check_same_thread=False)
+                connections[db_id] = c_conn
+            except Exception:
+                pass
+
     return connections
 
 
@@ -368,49 +385,167 @@ def get_connection_schema(db_id: str) -> Dict[str, Any]:
     return {"tables": table_cols, "foreign_keys": []}
 
 
-def register_custom_sql_database(db_id: str, sql_script: str) -> Tuple[bool, str]:
-    """Registers an in-memory SQLite database by executing a DDL/DML SQL script."""
+def register_custom_sql_database(
+    db_id: str,
+    sql_script: str,
+    overwrite_db: bool = False
+) -> Tuple[bool, str, List[str]]:
+    """
+    Registers or updates a SQLite database by executing a DDL/DML SQL script.
+    Preserves all existing tables unless overwrite_db is True.
+    If a table being created already exists, it updates that table while keeping all other tables intact.
+    """
     clean_id = db_id.strip().lower().replace(" ", "_")
     if not clean_id:
-        return False, "Database name cannot be empty."
+        return False, "Database name cannot be empty.", []
+
     try:
-        conn = sqlite3.connect(":memory:", check_same_thread=False)
+        CUSTOM_DB_DIR.mkdir(parents=True, exist_ok=True)
+        db_file = CUSTOM_DB_DIR / f"{clean_id}.sqlite"
+
+        # Built-in benchmark DBs
+        builtins = {"concert_singer", "pets_1", "car_1", "students", "hotel", "ecommerce", "company"}
+
+        if clean_id in DB_CONNECTIONS and not overwrite_db:
+            conn = DB_CONNECTIONS[clean_id]
+        else:
+            if clean_id in DB_CONNECTIONS:
+                try:
+                    DB_CONNECTIONS[clean_id].close()
+                except Exception:
+                    pass
+            if overwrite_db and db_file.exists():
+                try:
+                    db_file.unlink()
+                except Exception:
+                    pass
+
+            if clean_id in builtins and overwrite_db:
+                conn = sqlite3.connect(":memory:", check_same_thread=False)
+            else:
+                conn = sqlite3.connect(str(db_file), check_same_thread=False)
+
+        cursor = conn.cursor()
+
+        # Find tables being created in the script
+        created_tables = re.findall(
+            r'\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-zA-Z_]\w*)',
+            sql_script,
+            re.IGNORECASE
+        )
+        # Drop only the specific tables being re-defined to prevent 'table already exists' errors,
+        # while keeping all other tables completely untouched!
+        for tbl in created_tables:
+            cursor.execute(f"DROP TABLE IF EXISTS {tbl};")
+
         conn.executescript(sql_script)
         conn.commit()
         DB_CONNECTIONS[clean_id] = conn
-        return True, clean_id
+
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+        all_tables = [r[0] for r in cursor.fetchall() if r[0] != "sqlite_sequence"]
+        return True, clean_id, all_tables
     except Exception as e:
-        return False, str(e)
+        return False, str(e), []
 
 
-def register_custom_json_database(db_id: str, json_data: Dict[str, Any]) -> Tuple[bool, str]:
+def register_custom_json_database(
+    db_id: str,
+    json_data: Dict[str, Any],
+    overwrite_db: bool = False
+) -> Tuple[bool, str, List[str]]:
     """
-    Registers an in-memory SQLite database from a JSON structure:
+    Registers or updates a SQLite database from a JSON structure:
       {
         "tables": { "students": ["id", "name", "age"] },
         "data": { "students": [[1, "Alice", 20], [2, "Bob", 22]] }
       }
+    Preserves all existing tables unless overwrite_db is True.
     """
     clean_id = db_id.strip().lower().replace(" ", "_")
     if not clean_id:
-        return False, "Database name cannot be empty."
+        return False, "Database name cannot be empty.", []
+
     try:
-        conn = sqlite3.connect(":memory:", check_same_thread=False)
+        CUSTOM_DB_DIR.mkdir(parents=True, exist_ok=True)
+        db_file = CUSTOM_DB_DIR / f"{clean_id}.sqlite"
+        builtins = {"concert_singer", "pets_1", "car_1", "students", "hotel", "ecommerce", "company"}
+
+        if clean_id in DB_CONNECTIONS and not overwrite_db:
+            conn = DB_CONNECTIONS[clean_id]
+        else:
+            if clean_id in DB_CONNECTIONS:
+                try:
+                    DB_CONNECTIONS[clean_id].close()
+                except Exception:
+                    pass
+            if overwrite_db and db_file.exists():
+                try:
+                    db_file.unlink()
+                except Exception:
+                    pass
+
+            if clean_id in builtins and overwrite_db:
+                conn = sqlite3.connect(":memory:", check_same_thread=False)
+            else:
+                conn = sqlite3.connect(str(db_file), check_same_thread=False)
+
         cursor = conn.cursor()
         tables = json_data.get("tables", {})
         data = json_data.get("data", {})
-        
+
         for tbl_name, cols in tables.items():
+            cursor.execute(f"DROP TABLE IF EXISTS {tbl_name};")
             col_defs = ", ".join(f"{c} TEXT" for c in cols)
             cursor.execute(f"CREATE TABLE {tbl_name} ({col_defs});")
-            
+
             rows = data.get(tbl_name, [])
             if rows:
                 placeholders = ", ".join("?" for _ in cols)
                 cursor.executemany(f"INSERT INTO {tbl_name} VALUES ({placeholders})", rows)
-                
+
         conn.commit()
         DB_CONNECTIONS[clean_id] = conn
-        return True, clean_id
+
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+        all_tables = [r[0] for r in cursor.fetchall() if r[0] != "sqlite_sequence"]
+        return True, clean_id, all_tables
+    except Exception as e:
+        return False, str(e), []
+
+
+def delete_custom_database(db_id: str) -> Tuple[bool, str]:
+    """Deletes a custom database and its persistent disk file."""
+    clean_id = db_id.strip().lower()
+    builtins = {"concert_singer", "pets_1", "car_1", "students", "hotel", "ecommerce", "company"}
+    if clean_id in builtins:
+        return False, "Cannot delete built-in benchmark database."
+
+    if clean_id in DB_CONNECTIONS:
+        try:
+            DB_CONNECTIONS[clean_id].close()
+        except Exception:
+            pass
+        del DB_CONNECTIONS[clean_id]
+
+    db_file = CUSTOM_DB_DIR / f"{clean_id}.sqlite"
+    if db_file.exists():
+        try:
+            db_file.unlink()
+        except Exception:
+            pass
+    return True, f"Database '{clean_id}' deleted successfully."
+
+
+def delete_table_from_database(db_id: str, table_name: str) -> Tuple[bool, str]:
+    """Drops a single table from the database while keeping all other tables."""
+    conn = DB_CONNECTIONS.get(db_id)
+    if not conn:
+        return False, f"Database '{db_id}' not found."
+    try:
+        cur = conn.cursor()
+        cur.execute(f"DROP TABLE IF EXISTS {table_name};")
+        conn.commit()
+        return True, f"Table '{table_name}' dropped successfully."
     except Exception as e:
         return False, str(e)

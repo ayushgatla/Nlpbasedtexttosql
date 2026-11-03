@@ -126,7 +126,9 @@ from src.mock_db import (
     DB_CONNECTIONS,
     get_connection_schema,
     register_custom_sql_database,
-    register_custom_json_database
+    register_custom_json_database,
+    delete_custom_database,
+    delete_table_from_database
 )
 from src.sql_generator import compile_advanced_sql
 from src.schema_graph import plan_table_joins
@@ -165,7 +167,22 @@ def get_transformer_pipeline(model_path: str):
 def get_tables_data_for_prompt(db_id: str, schema_tables: Dict[str, List[str]]):
     entry = next((d for d in tables_data if d.get("db_id") == db_id), None)
     if entry:
-        return [entry]
+        existing_tables = set(t.lower() for t in entry.get("table_names_original", []))
+        extra_tables = [t for t in schema_tables.keys() if t.lower() not in existing_tables]
+        if not extra_tables:
+            return [entry]
+        import copy
+        entry_clone = copy.deepcopy(entry)
+        t_names = list(entry_clone.get("table_names_original", []))
+        col_names = list(entry_clone.get("column_names_original", []))
+        for extra_t in extra_tables:
+            t_idx = len(t_names)
+            t_names.append(extra_t)
+            for c in schema_tables.get(extra_t, []):
+                col_names.append([t_idx, c])
+        entry_clone["table_names_original"] = t_names
+        entry_clone["column_names_original"] = col_names
+        return [entry_clone]
     t_names = list(schema_tables.keys())
     col_names = [[-1, "*"]]
     col_to_idx = {}
@@ -445,68 +462,87 @@ with st.sidebar:
 
     st.markdown("---")
     
-    # Option to add Custom Database
-    with st.expander("Add Custom Database (SQL or JSON)"):
-        new_db_name = st.text_input("New Database Name", placeholder="e.g. university_db").strip()
+    # Option to Add / Insert Tables or Databases
+    with st.expander("Add / Insert Tables (SQL or JSON)"):
+        target_mode = st.radio(
+            "Target Database",
+            [f"Active Database ('{selected_db}')", "Create New Database"],
+            horizontal=True
+        )
+        if target_mode.startswith("Active Database"):
+            target_db_name = selected_db
+            curr_tables = list(get_connection_schema(selected_db).get("tables", {}).keys())
+            if curr_tables:
+                st.caption(f"Existing tables in `{selected_db}`: `{', '.join(curr_tables)}`. New tables will be added alongside existing tables without deleting them.")
+        else:
+            target_db_name = st.text_input("New Database Name", placeholder="e.g. university_db").strip()
+
         data_format = st.radio("Input Format", ["SQL Script (DDL / DML)", "JSON Format"])
-        
+
         if data_format == "SQL Script (DDL / DML)":
-            default_sql_template = """CREATE TABLE students (
-    student_id INTEGER PRIMARY KEY,
-    name TEXT,
-    age INTEGER,
-    major TEXT
+            default_sql_template = """CREATE TABLE courses (
+    course_id INTEGER PRIMARY KEY,
+    course_name TEXT,
+    department TEXT,
+    credits INTEGER
 );
-INSERT INTO students VALUES 
-    (1, 'Alice Smith', 20, 'Computer Science'),
-    (2, 'Bob Jones', 22, 'Mathematics'),
-    (3, 'Charlie Brown', 21, 'Physics');"""
+INSERT INTO courses VALUES 
+    (101, 'Algorithms', 'Computer Science', 4),
+    (102, 'Calculus III', 'Mathematics', 4);"""
             custom_sql_input = st.text_area("SQL Schema & Insert Statements", value=default_sql_template, height=180)
-            
-            if st.button("Create Database from SQL"):
-                if not new_db_name:
+
+            c_btn1, c_btn2 = st.columns([3, 2])
+            with c_btn1:
+                submit_sql = st.button("Execute & Add Table(s)")
+            with c_btn2:
+                overwrite_all = st.checkbox("Wipe & recreate DB", value=False, help="Check only if you want to completely erase the entire database before inserting.")
+
+            if submit_sql:
+                if not target_db_name:
                     st.error("Please provide a database name.")
                 else:
-                    success, msg = register_custom_sql_database(new_db_name, custom_sql_input)
+                    success, msg, all_tbls = register_custom_sql_database(target_db_name, custom_sql_input, overwrite_db=overwrite_all)
                     if success:
-                        st.session_state.custom_dbs.append(msg)
+                        if msg not in st.session_state.custom_dbs:
+                            st.session_state.custom_dbs.append(msg)
                         st.session_state.selected_db = msg
-                        st.success(f"Database '{msg}' registered successfully.")
+                        st.success(f"Database '{msg}' now has {len(all_tbls)} table(s): {', '.join(all_tbls)}.")
                         st.rerun()
                     else:
                         st.error(f"SQL Error: {msg}")
-                        
+
         else:
             default_json_template = """{
   "tables": {
-    "employees": ["emp_id", "name", "department", "salary"],
-    "departments": ["dept_id", "dept_name", "budget"]
+    "courses": ["course_id", "course_name", "department", "credits"]
   },
   "data": {
-    "employees": [
-      [1, "Alice", "Engineering", 95000],
-      [2, "Bob", "Design", 80000],
-      [3, "Charlie", "Engineering", 105000]
-    ],
-    "departments": [
-      [1, "Engineering", 500000],
-      [2, "Design", 200000]
+    "courses": [
+      [101, "Algorithms", "Computer Science", 4],
+      [102, "Calculus III", "Mathematics", 4]
     ]
   }
 }"""
             custom_json_input = st.text_area("JSON Schema Structure", value=default_json_template, height=200)
-            
-            if st.button("Create Database from JSON"):
-                if not new_db_name:
+
+            c_btn1, c_btn2 = st.columns([3, 2])
+            with c_btn1:
+                submit_json = st.button("Execute & Add Table(s) from JSON")
+            with c_btn2:
+                overwrite_all_json = st.checkbox("Wipe & recreate DB", value=False, key="chk_json_wipe")
+
+            if submit_json:
+                if not target_db_name:
                     st.error("Please provide a database name.")
                 else:
                     try:
                         parsed_json = json.loads(custom_json_input)
-                        success, msg = register_custom_json_database(new_db_name, parsed_json)
+                        success, msg, all_tbls = register_custom_json_database(target_db_name, parsed_json, overwrite_db=overwrite_all_json)
                         if success:
-                            st.session_state.custom_dbs.append(msg)
+                            if msg not in st.session_state.custom_dbs:
+                                st.session_state.custom_dbs.append(msg)
                             st.session_state.selected_db = msg
-                            st.success(f"Database '{msg}' registered successfully.")
+                            st.success(f"Database '{msg}' now has {len(all_tbls)} table(s): {', '.join(all_tbls)}.")
                             st.rerun()
                         else:
                             st.error(f"Error: {msg}")
@@ -517,10 +553,20 @@ INSERT INTO students VALUES
     st.markdown("---")
     st.markdown("### Schema Inspector")
     active_schema = get_connection_schema(selected_db)
+    builtins = {"concert_singer", "pets_1", "car_1", "students", "hotel", "ecommerce", "company"}
     if active_schema and active_schema.get("tables"):
         for tbl, cols in active_schema["tables"].items():
             with st.expander(f"{tbl} ({len(cols)} columns)"):
                 st.code(", ".join(cols), language="sql")
+                if selected_db not in builtins:
+                    if st.button(f"Drop Table '{tbl}'", key=f"btn_drop_{selected_db}_{tbl}"):
+                        delete_table_from_database(selected_db, tbl)
+                        st.rerun()
+        if selected_db not in builtins:
+            if st.button(f"Delete Database '{selected_db}'", type="secondary"):
+                delete_custom_database(selected_db)
+                st.session_state.selected_db = "concert_singer"
+                st.rerun()
     else:
         st.info("No tables detected in active connection.")
 
