@@ -286,10 +286,24 @@ def repair_sql_schema_mismatches(
         prefix_low = prefix.lower()
         col_low = col_name.lower()
 
-        curr_table = alias_to_table.get(prefix_upper) or (prefix if prefix_low in table_to_cols else None)
-        if curr_table and col_low in table_to_cols.get(curr_table.lower(), {}):
-            real_col = table_to_cols[curr_table.lower()][col_low]
-            return f"{prefix}.{real_col}"
+        # Check if prefix is an alias already in the query (e.g. T1, T2)
+        if prefix_upper in alias_to_table:
+            curr_table = alias_to_table[prefix_upper]
+            if col_low in table_to_cols.get(curr_table.lower(), {}):
+                real_col = table_to_cols[curr_table.lower()][col_low]
+                return f"{prefix}.{real_col}"
+        # Check if prefix is a table name that is ALREADY IN THE QUERY
+        elif prefix_low in table_to_alias:
+            assigned_alias = table_to_alias[prefix_low]
+            if col_low in table_to_cols.get(prefix_low, {}):
+                real_col = table_to_cols[prefix_low][col_low]
+                return f"{assigned_alias}.{real_col}"
+        # If prefix is a real table in the database, but NOT in the query:
+        elif prefix_low in table_to_cols:
+            real_tbl = next((t for t in table_names if t.lower() == prefix_low), prefix)
+            real_col = table_to_cols.get(prefix_low, {}).get(col_low, col_name)
+            missing_tables_to_add.append((real_tbl, col_low))
+            return f"__NEED_{real_tbl.upper()}__.{real_col}"
 
         candidate_tables = col_to_tables.get(col_low, [])
         if not candidate_tables:
@@ -351,7 +365,7 @@ def repair_sql_schema_mismatches(
                     continue
 
                 best_path = None
-                for exist_alias, exist_tbl in alias_to_table.items():
+                for exist_alias, exist_tbl in list(alias_to_table.items()):
                     path = find_shortest_join_path(fk_graph, exist_tbl, target_table)
                     if path is not None:
                         if best_path is None or len(path) < len(best_path):
@@ -368,10 +382,31 @@ def repair_sql_schema_mismatches(
                             )
                             table_to_alias[to_tbl.lower()] = new_alias
                             alias_to_table[new_alias] = to_tbl
+                else:
+                    # Fallback when explicit FK constraints are not declared:
+                    # Join via shared column names (e.g. course_id in Enrollment and Course)
+                    for exist_alias, exist_tbl in list(alias_to_table.items()):
+                        exist_cols = table_to_cols.get(exist_tbl.lower(), {})
+                        target_cols = table_to_cols.get(target_table.lower(), {})
+                        common_cols = [c for c in target_cols if c in exist_cols]
+                        id_common = [c for c in common_cols if 'id' in c or 'key' in c or 'code' in c]
+                        join_col = id_common[0] if id_common else (common_cols[0] if common_cols else None)
+                        if join_col:
+                            new_alias = f"T{next_num}"
+                            next_num += 1
+                            real_target_col = target_cols[join_col]
+                            real_exist_col = exist_cols[join_col]
+                            joins_to_append.append(
+                                f"JOIN {target_table} AS {new_alias} ON {exist_alias}.{real_exist_col} = {new_alias}.{real_target_col}"
+                            )
+                            table_to_alias[target_table.lower()] = new_alias
+                            alias_to_table[new_alias] = target_table
+                            break
 
                 assigned_alias = table_to_alias.get(target_table.lower(), target_table)
-                real_col = table_to_cols[target_table.lower()][col_low]
+                real_col = table_to_cols.get(target_table.lower(), {}).get(col_low, col_low)
                 sql_repaired = sql_repaired.replace(f"__NEED_{target_table.upper()}__", assigned_alias)
+                sql_repaired = re.sub(rf'\b{re.escape(target_table)}\.{re.escape(real_col)}\b', f"{assigned_alias}.{real_col}", sql_repaired, flags=re.IGNORECASE)
 
             if joins_to_append:
                 join_str = " " + " ".join(joins_to_append)
