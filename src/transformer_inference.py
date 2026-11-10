@@ -286,6 +286,15 @@ def repair_sql_schema_mismatches(
         prefix_low = prefix.lower()
         col_low = col_name.lower()
 
+        # Check column synonyms (e.g. is_male / sex -> gender)
+        if col_low in ('is_male', 'sex'):
+            curr_tbl_name = alias_to_table.get(prefix_upper) or (prefix if prefix_low in table_to_alias else None)
+            if curr_tbl_name and 'gender' in table_to_cols.get(curr_tbl_name.lower(), {}):
+                real_col = table_to_cols[curr_tbl_name.lower()]['gender']
+                return f"{prefix}.{real_col}"
+            elif 'gender' in col_to_tables:
+                col_low = 'gender'
+
         # Check if prefix is an alias already in the query (e.g. T1, T2)
         if prefix_upper in alias_to_table:
             curr_table = alias_to_table[prefix_upper]
@@ -326,6 +335,13 @@ def repair_sql_schema_mismatches(
         inspect_col_ref,
         sql
     )
+
+    # 3a. Normalize boolean/abbreviated gender values if gender column is present
+    if 'gender' in col_to_tables:
+        sql_repaired = re.sub(r'(\b\w+\.gender|\bgender)\s*=\s*1\b', r"\1 = 'Male'", sql_repaired, flags=re.IGNORECASE)
+        sql_repaired = re.sub(r'(\b\w+\.gender|\bgender)\s*=\s*0\b', r"\1 = 'Female'", sql_repaired, flags=re.IGNORECASE)
+        sql_repaired = re.sub(r"(\b\w+\.gender|\bgender)\s*=\s*'[TtMm]'\b", r"\1 = 'Male'", sql_repaired, flags=re.IGNORECASE)
+        sql_repaired = re.sub(r"(\b\w+\.gender|\bgender)\s*=\s*'[Ff]'\b", r"\1 = 'Female'", sql_repaired, flags=re.IGNORECASE)
 
     # 3b. Disambiguate unprefixed column references if active aliases exist in query
     if table_to_alias:

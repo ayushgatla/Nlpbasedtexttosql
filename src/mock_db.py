@@ -31,14 +31,13 @@ def create_sample_databases() -> Dict[str, sqlite3.Connection]:
             Name TEXT,
             Capacity INTEGER,
             Highest INTEGER,
-            Lowest INTEGER,
-            Average INTEGER
+            Lowest INTEGER
         );
         INSERT INTO stadium VALUES 
-            (1, 'London', 'Wembley Arena', 90000, 89000, 75000, 82000),
-            (2, 'Manchester', 'Old Trafford', 75000, 74000, 68000, 71000),
-            (3, 'Paris', 'Stade de France', 81000, 80000, 72000, 76000),
-            (4, 'Berlin', 'Olympiastadion', 74000, 73000, 65000, 69000);
+            (1, 'London', 'Wembley Arena', 90000, 89000, 75000),
+            (2, 'Manchester', 'Old Trafford', 75000, 74000, 68000),
+            (3, 'Paris', 'Stade de France', 81000, 80000, 72000),
+            (4, 'Berlin', 'Olympiastadion', 74000, 73000, 65000);
 
         CREATE TABLE singer (
             Singer_ID INTEGER PRIMARY KEY,
@@ -47,15 +46,15 @@ def create_sample_databases() -> Dict[str, sqlite3.Connection]:
             Song_Name TEXT,
             Song_release_year INTEGER,
             Age INTEGER,
-            Is_male INTEGER
+            gender TEXT
         );
         INSERT INTO singer VALUES
-            (1, 'Adele Adkins', 'France', 'Rolling in the Deep', 2010, 34, 0),
-            (2, 'Ed Sheeran', 'United Kingdom', 'Shape of You', 2017, 32, 1),
-            (3, 'Dua Lipa', 'United Kingdom', 'Levitating', 2020, 27, 0),
-            (4, 'Stromae', 'France', 'Papaoutai', 2013, 38, 1),
-            (5, 'Billie Eilish', 'United States', 'Bad Guy', 2019, 21, 0),
-            (6, 'The Weeknd', 'Canada', 'Blinding Lights', 2019, 33, 1);
+            (1, 'Adele Adkins', 'France', 'Rolling in the Deep', 2010, 34, 'Female'),
+            (2, 'Ed Sheeran', 'United Kingdom', 'Shape of You', 2017, 32, 'Male'),
+            (3, 'Dua Lipa', 'United Kingdom', 'Levitating', 2020, 27, 'Female'),
+            (4, 'Stromae', 'France', 'Papaoutai', 2013, 38, 'Male'),
+            (5, 'Billie Eilish', 'United States', 'Bad Guy', 2019, 21, 'Female'),
+            (6, 'The Weeknd', 'Canada', 'Blinding Lights', 2019, 33, 'Male');
 
         CREATE TABLE concert (
             concert_ID INTEGER PRIMARY KEY,

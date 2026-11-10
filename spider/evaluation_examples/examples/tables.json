@@ -13966,7 +13966,7 @@
          ],
          [
             0,
-            "stadium id"
+            "stadium_id"
          ],
          [
             0,
@@ -13989,12 +13989,8 @@
             "lowest"
          ],
          [
-            0,
-            "average"
-         ],
-         [
             1,
-            "singer id"
+            "singer_id"
          ],
          [
             1,
@@ -14006,11 +14002,11 @@
          ],
          [
             1,
-            "song name"
+            "song_name"
          ],
          [
             1,
-            "song release year"
+            "song_release_year"
          ],
          [
             1,
@@ -14018,15 +14014,15 @@
          ],
          [
             1,
-            "is male"
+            "gender"
          ],
          [
             2,
-            "concert id"
+            "concert_id"
          ],
          [
             2,
-            "concert name"
+            "concert_name"
          ],
          [
             2,
@@ -14034,7 +14030,7 @@
          ],
          [
             2,
-            "stadium id"
+            "stadium_id"
          ],
          [
             2,
@@ -14042,11 +14038,11 @@
          ],
          [
             3,
-            "concert id"
+            "concert_id"
          ],
          [
             3,
-            "singer id"
+            "singer_id"
          ]
       ],
       "column_names_original": [
@@ -14079,10 +14075,6 @@
             "Lowest"
          ],
          [
-            0,
-            "Average"
-         ],
-         [
             1,
             "Singer_ID"
          ],
@@ -14108,7 +14100,7 @@
          ],
          [
             1,
-            "Is_male"
+            "gender"
          ],
          [
             2,
@@ -14166,16 +14158,16 @@
       "db_id": "concert_singer",
       "foreign_keys": [
          [
-            18,
+            17,
             1
          ],
          [
-            21,
-            8
+            20,
+            7
          ],
          [
-            20,
-            15
+            19,
+            14
          ]
       ],
       "primary_keys": [
