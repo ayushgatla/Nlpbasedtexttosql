@@ -246,12 +246,12 @@ def repair_sql_schema_mismatches(
         except Exception:
             pass
 
-    if not alias_to_table:
-        for m in re.finditer(r'\b(?:FROM|JOIN)\s+([a-zA-Z_]\w*)\b', sql, re.IGNORECASE):
-            tbl_name = m.group(1)
-            real_tbl = next((t for t in table_names if t.lower() == tbl_name.lower()), None)
-            if real_tbl:
-                table_to_alias[real_tbl.lower()] = real_tbl
+    for m in re.finditer(r'\b(?:FROM|JOIN)\s+([a-zA-Z_]\w*)\b', sql, re.IGNORECASE):
+        tbl_name = m.group(1)
+        real_tbl = next((t for t in table_names if t.lower() == tbl_name.lower()), None)
+        if real_tbl and real_tbl.lower() not in table_to_alias:
+            table_to_alias[real_tbl.lower()] = real_tbl
+            alias_to_table[real_tbl] = real_tbl
 
     # 2b. Prune redundant self-joins on identical table and key
     pattern_self = r'\bJOIN\s+([a-zA-Z_]\w*)\s+(?:AS\s+)?(T\d+)\s+ON\s+(?:(T\d+)\.([a-zA-Z_]\w*)\s*=\s*\2\.\4|\2\.([a-zA-Z_]\w*)\s*=\s*(T\d+)\.\5)\b'
@@ -363,6 +363,10 @@ def repair_sql_schema_mismatches(
                 if active_aliases:
                     target_alias = active_aliases[0]
                     return f"{prefix_char}{target_alias}.{word}"
+                else:
+                    target_table = candidates[0]
+                    missing_tables_to_add.append((target_table, word_low))
+                    return f"{prefix_char}__NEED_{target_table.upper()}__.{word}"
             return m.group(0)
 
         sql_repaired = re.sub(r'(^|[^.\w])([a-zA-Z_]\w*)\b(?!\.)', repl_unaliased, sql_repaired)
@@ -373,15 +377,24 @@ def repair_sql_schema_mismatches(
             from src.schema_graph import build_foreign_key_graph, find_shortest_join_path
             fk_graph = build_foreign_key_graph(entry)
 
-            next_num = max(used_alias_nums, default=1) + 1
+            next_num = max(used_alias_nums, default=0) + 1
             joins_to_append = []
+
+            # Determine existing anchor tables in query
+            active_anchors = []
+            for exist_tbl_low, exist_alias in list(table_to_alias.items()):
+                real_exist_tbl = next((t for t in table_names if t.lower() == exist_tbl_low), exist_tbl_low)
+                active_anchors.append((exist_alias, real_exist_tbl))
+            if not active_anchors:
+                for exist_alias, exist_tbl in list(alias_to_table.items()):
+                    active_anchors.append((exist_alias, exist_tbl))
 
             for target_table, col_low in missing_tables_to_add:
                 if target_table.lower() in table_to_alias:
                     continue
 
                 best_path = None
-                for exist_alias, exist_tbl in list(alias_to_table.items()):
+                for exist_alias, exist_tbl in active_anchors:
                     path = find_shortest_join_path(fk_graph, exist_tbl, target_table)
                     if path is not None:
                         if best_path is None or len(path) < len(best_path):
@@ -398,10 +411,11 @@ def repair_sql_schema_mismatches(
                             )
                             table_to_alias[to_tbl.lower()] = new_alias
                             alias_to_table[new_alias] = to_tbl
+                            active_anchors.append((new_alias, to_tbl))
                 else:
                     # Fallback when explicit FK constraints are not declared:
                     # Join via shared column names (e.g. course_id in Enrollment and Course)
-                    for exist_alias, exist_tbl in list(alias_to_table.items()):
+                    for exist_alias, exist_tbl in active_anchors:
                         exist_cols = table_to_cols.get(exist_tbl.lower(), {})
                         target_cols = table_to_cols.get(target_table.lower(), {})
                         common_cols = [c for c in target_cols if c in exist_cols]
@@ -417,6 +431,7 @@ def repair_sql_schema_mismatches(
                             )
                             table_to_alias[target_table.lower()] = new_alias
                             alias_to_table[new_alias] = target_table
+                            active_anchors.append((new_alias, target_table))
                             break
 
                 assigned_alias = table_to_alias.get(target_table.lower(), target_table)

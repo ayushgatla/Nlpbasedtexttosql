@@ -203,17 +203,55 @@ def get_tables_data_for_prompt(db_id: str, schema_tables: Dict[str, List[str]]):
                     to_tbl = fk[2]
                     from_col = fk[3]
                     to_col = fk[4]
-                    k1 = (t.lower(), from_col.lower())
-                    k2 = (to_tbl.lower(), to_col.lower())
-                    if k1 in col_to_idx and k2 in col_to_idx:
-                        foreign_keys.append([col_to_idx[k1], col_to_idx[k2]])
+                    if not to_col:
+                        try:
+                            cur.execute(f"PRAGMA table_info({to_tbl});")
+                            for c_info in cur.fetchall():
+                                if c_info[5] == 1:
+                                    to_col = c_info[1]
+                                    break
+                        except Exception:
+                            pass
+                    if to_col:
+                        k1 = (t.lower(), from_col.lower())
+                        k2 = (to_tbl.lower(), to_col.lower())
+                        if k1 in col_to_idx and k2 in col_to_idx:
+                            foreign_keys.append([col_to_idx[k1], col_to_idx[k2]])
         except Exception:
             pass
 
+    # Implicit foreign keys fallback for unconstrained schemas (e.g. matching id columns):
+    existing_fk_pairs = set()
+    for a, b in foreign_keys:
+        existing_fk_pairs.add((col_names[a][0], col_names[b][0]))
+        existing_fk_pairs.add((col_names[b][0], col_names[a][0]))
+
+    for t1_idx, t1 in enumerate(t_names):
+        for t2_idx, t2 in enumerate(t_names):
+            if t1_idx >= t2_idx or (t1_idx, t2_idx) in existing_fk_pairs:
+                continue
+            cols1 = schema_tables.get(t1, [])
+            cols2 = schema_tables.get(t2, [])
+            for c1 in cols1:
+                c1_low = c1.lower()
+                if c1_low.endswith("_id") or c1_low == "id":
+                    for c2 in cols2:
+                        c2_low = c2.lower()
+                        if c1_low == c2_low or (c1_low == f"{t2.lower()}_id" and c2_low == "id") or (c2_low == f"{t1.lower()}_id" and c1_low == "id"):
+                            k1 = (t1.lower(), c1_low)
+                            k2 = (t2.lower(), c2_low)
+                            if k1 in col_to_idx and k2 in col_to_idx:
+                                foreign_keys.append([col_to_idx[k1], col_to_idx[k2]])
+                                existing_fk_pairs.add((t1_idx, t2_idx))
+                                break
+
     return [{
         "db_id": db_id,
+        "table_names": [t.lower() for t in t_names],
         "table_names_original": t_names,
+        "column_names": [[t_id, c.lower()] for t_id, c in col_names],
         "column_names_original": col_names,
+        "column_types": ["text" for _ in col_names],
         "foreign_keys": foreign_keys
     }]
 
@@ -449,9 +487,14 @@ with st.sidebar:
     
     # All available databases
     available_dbs = list(DB_CONNECTIONS.keys())
-    db_index = available_dbs.index(st.session_state.selected_db) if st.session_state.selected_db in available_dbs else 0
-    selected_db = st.selectbox("Active Database", available_dbs, index=db_index)
-    st.session_state.selected_db = selected_db
+    if st.session_state.selected_db not in available_dbs:
+        st.session_state.selected_db = available_dbs[0]
+    db_index = available_dbs.index(st.session_state.selected_db)
+    sidebar_selected = st.selectbox("Active Database", available_dbs, index=db_index, key="sidebar_db_select")
+    if sidebar_selected != st.session_state.selected_db:
+        st.session_state.selected_db = sidebar_selected
+        st.rerun()
+    selected_db = st.session_state.selected_db
     
     # Presets for the selected DB (if any)
     filtered_presets = [p for p in PRESETS if p["db"] == selected_db]
@@ -577,6 +620,33 @@ INSERT INTO courses VALUES
         t5_model, t5_tokenizer, t5_device = None, None, "cpu"
 
 # Main Query Formulation Section
+active_schema_summary = get_connection_schema(st.session_state.selected_db).get("tables", {})
+main_db_col1, main_db_col2 = st.columns([1, 2])
+with main_db_col1:
+    available_dbs = list(DB_CONNECTIONS.keys())
+    if st.session_state.selected_db not in available_dbs:
+        st.session_state.selected_db = available_dbs[0]
+    main_db_idx = available_dbs.index(st.session_state.selected_db)
+    main_selected = st.selectbox(
+        "Active Database:",
+        available_dbs,
+        index=main_db_idx,
+        key="main_db_select",
+        help="Switch between existing databases to run queries and inspect tables."
+    )
+    if main_selected != st.session_state.selected_db:
+        st.session_state.selected_db = main_selected
+        st.rerun()
+    selected_db = st.session_state.selected_db
+
+with main_db_col2:
+    st.markdown(f"**Loaded Tables in `{selected_db}`:**")
+    if active_schema_summary:
+        tbl_badges = " ".join([f"`{t}`" for t in active_schema_summary.keys()])
+        st.markdown(f"{tbl_badges} ({len(active_schema_summary)} tables)")
+    else:
+        st.caption("No tables detected in active connection.")
+
 st.markdown("### Natural Language Query")
 
 if "user_query" not in st.session_state:
@@ -859,10 +929,24 @@ if run_button or user_query:
     st.markdown("---")
     st.markdown("### Generated SQL & Query Execution")
 
+    headers_t5, rows_t5, err_t5 = execute_sql(selected_db, t5_sql)
+    if err_t5 and ("no such column:" in err_t5 or "no such table:" in err_t5):
+        from src.transformer_inference import repair_sql_schema_mismatches
+        healed_sql = repair_sql_schema_mismatches(t5_sql, selected_db, t5_tables_data)
+        if healed_sql != t5_sql:
+            h_retry, r_retry, err_retry = execute_sql(selected_db, healed_sql)
+            if not err_retry:
+                t5_sql = healed_sql
+                headers_t5, rows_t5, err_t5 = h_retry, r_retry, None
+        if err_t5 and ir_sql and ir_sql != t5_sql:
+            h_ir, r_ir, err_ir = execute_sql(selected_db, ir_sql)
+            if not err_ir:
+                t5_sql = ir_sql
+                headers_t5, rows_t5, err_t5 = h_ir, r_ir, None
+
     st.caption("Synthesized SQL Query:")
     st.markdown(f'<div class="sql-code-box">{t5_sql}</div>', unsafe_allow_html=True)
 
-    headers_t5, rows_t5, err_t5 = execute_sql(selected_db, t5_sql)
     st.caption("SQLite Execution Output:")
     if err_t5:
         st.error(f"SQL Execution Error: {err_t5}")
@@ -882,8 +966,22 @@ if run_button or user_query:
 
 # Live Database Table Inspector
 st.markdown("---")
-st.markdown("### Live Database Table Inspector")
-st.caption(f"Viewing live tables and data in active database: `{selected_db}`")
+insp_col1, insp_col2 = st.columns([2, 1])
+with insp_col1:
+    st.markdown("### Live Database Table Inspector")
+    st.caption(f"Viewing live tables and data in active database: `{selected_db}`")
+with insp_col2:
+    available_dbs = list(DB_CONNECTIONS.keys())
+    insp_db_idx = available_dbs.index(selected_db) if selected_db in available_dbs else 0
+    insp_selected = st.selectbox(
+        "Switch Database to Inspect:",
+        available_dbs,
+        index=insp_db_idx,
+        key="insp_db_select"
+    )
+    if insp_selected != st.session_state.selected_db:
+        st.session_state.selected_db = insp_selected
+        st.rerun()
 
 lab_conn = DB_CONNECTIONS.get(selected_db)
 if lab_conn:
