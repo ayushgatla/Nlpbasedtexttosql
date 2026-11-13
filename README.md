@@ -144,10 +144,48 @@ print("Synthesized SQL:", sql)
 
 ---
 
+## Docker Deployment
+
+The application is fully containerized with Docker and Docker Compose. Custom user databases (`data/custom_dbs/`) and model weights are mounted as volumes to persist data across container lifecycles.
+
+### Option 1: Docker Compose (Recommended)
+```bash
+# Build and run container in detached mode
+docker compose up --build -d
+
+# Open in browser: http://localhost:8501
+
+# Inspect running logs
+docker compose logs -f
+
+# Stop container
+docker compose down
+```
+
+### Option 2: Standalone Docker Run
+```bash
+# 1. Build image
+docker build -t neurosql-studio .
+
+# 2. Run container with port forwarding and volume persistence
+docker run -d -p 8501:8501 \
+  -v "$(pwd)/data/custom_dbs:/app/data/custom_dbs" \
+  --name neurosql-studio \
+  neurosql-studio
+```
+
+On Windows, you can also double-click [`run_docker.bat`](file:///c:/Users/ayush/Downloads/project/nLP/run_docker.bat) or on Linux/macOS run [`./run_docker.sh`](file:///c:/Users/ayush/Downloads/project/nLP/run_docker.sh).
+
+---
+
 ## Project Structure
 
 ```text
 ├── app.py                     # Streamlit Interactive Web Application Studio
+├── Dockerfile                 # Production Docker container definition
+├── docker-compose.yml         # Multi-container orchestration & volume persistence
+├── run_docker.bat             # Windows one-click Docker launcher script
+├── run_docker.sh              # Linux / macOS Docker launcher script
 ├── Day3.ipynb                 # Research and fine-tuning experimental notebook
 ├── requirements.txt           # Python dependencies
 ├── README.md                  # Project overview & quickstart guide

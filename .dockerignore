@@ -1,0 +1,34 @@
+# Version control
+.git/
+.gitignore
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python cache & compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+*.ipynb_checkpoints/
+
+# Notebooks & large backups
+*.ipynb
+*.bak
+documentation_pdfs/
+
+# Temporary test & debug files
+debug_*.py
+test_*.py
+
+# Large intermediate training checkpoints
+saved_flan_t5_sql/checkpoint-876/
+saved_flan_t5_sql/checkpoint-1314/
+
+# OS and IDE files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
