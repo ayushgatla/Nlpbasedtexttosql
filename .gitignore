@@ -21,6 +21,10 @@ best_model_v2_relational/
 *.safetensors
 *.bin
 
+# Installers & Executables
+*.exe
+DockerDesktopInstaller.exe
+
 # OS & IDE files
 .DS_Store
 Thumbs.db
