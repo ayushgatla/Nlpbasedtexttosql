@@ -529,6 +529,8 @@ def delete_custom_database(db_id: str) -> Tuple[bool, str]:
 
     db_file = CUSTOM_DB_DIR / f"{clean_id}.sqlite"
     if db_file.exists():
+        import gc
+        gc.collect()
         try:
             db_file.unlink()
         except Exception:

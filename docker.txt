@@ -1,0 +1,10 @@
+# Build and start container in the background
+docker compose up --build -d
+
+# Open in your browser: http://localhost:8501
+
+# View live container logs
+docker compose logs -f
+
+# Stop and shut down container
+docker compose down

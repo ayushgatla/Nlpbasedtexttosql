@@ -133,6 +133,8 @@ from src.mock_db import (
 from src.sql_generator import compile_advanced_sql
 from src.schema_graph import plan_table_joins
 
+BUILTIN_DBS = {"concert_singer", "pets_1", "car_1", "students", "hotel", "ecommerce", "company"}
+
 # Load tables.json if available
 tables_path = repo_root / "spider/evaluation_examples/examples/tables.json"
 if not tables_path.exists():
@@ -220,30 +222,26 @@ def get_tables_data_for_prompt(db_id: str, schema_tables: Dict[str, List[str]]):
         except Exception:
             pass
 
-    # Implicit foreign keys fallback for unconstrained schemas (e.g. matching id columns):
-    existing_fk_pairs = set()
-    for a, b in foreign_keys:
-        existing_fk_pairs.add((col_names[a][0], col_names[b][0]))
-        existing_fk_pairs.add((col_names[b][0], col_names[a][0]))
-
-    for t1_idx, t1 in enumerate(t_names):
-        for t2_idx, t2 in enumerate(t_names):
-            if t1_idx >= t2_idx or (t1_idx, t2_idx) in existing_fk_pairs:
-                continue
-            cols1 = schema_tables.get(t1, [])
-            cols2 = schema_tables.get(t2, [])
-            for c1 in cols1:
-                c1_low = c1.lower()
-                if c1_low.endswith("_id") or c1_low == "id":
-                    for c2 in cols2:
-                        c2_low = c2.lower()
-                        if c1_low == c2_low or (c1_low == f"{t2.lower()}_id" and c2_low == "id") or (c2_low == f"{t1.lower()}_id" and c1_low == "id"):
-                            k1 = (t1.lower(), c1_low)
-                            k2 = (t2.lower(), c2_low)
-                            if k1 in col_to_idx and k2 in col_to_idx:
-                                foreign_keys.append([col_to_idx[k1], col_to_idx[k2]])
-                                existing_fk_pairs.add((t1_idx, t2_idx))
-                                break
+    # Implicit foreign keys fallback ONLY for unconstrained schemas where NO foreign keys were declared:
+    if not foreign_keys:
+        for t1_idx, t1 in enumerate(t_names):
+            for t2_idx, t2 in enumerate(t_names):
+                if t1_idx >= t2_idx:
+                    continue
+                cols1 = schema_tables.get(t1, [])
+                cols2 = schema_tables.get(t2, [])
+                for c1 in cols1:
+                    c1_low = c1.lower()
+                    if c1_low.endswith("_id") or c1_low == "id":
+                        for c2 in cols2:
+                            c2_low = c2.lower()
+                            # Match primary key patterns like course_id <-> id or table_id <-> id
+                            if (c1_low == f"{t2.lower()}_id" and c2_low == "id") or (c2_low == f"{t1.lower()}_id" and c1_low == "id") or (c1_low == c2_low and (c1_low == f"{t1.lower()}_id" or c2_low == f"{t2.lower()}_id")):
+                                k1 = (t1.lower(), c1_low)
+                                k2 = (t2.lower(), c2_low)
+                                if k1 in col_to_idx and k2 in col_to_idx:
+                                    foreign_keys.append([col_to_idx[k1], col_to_idx[k2]])
+                                    break
 
     return [{
         "db_id": db_id,
@@ -480,6 +478,61 @@ if "custom_dbs" not in st.session_state:
     st.session_state.custom_dbs = []
 if "selected_db" not in st.session_state:
     st.session_state.selected_db = "concert_singer"
+if "cached_query_result" not in st.session_state:
+    st.session_state.cached_query_result = None
+
+def queue_active_db_switch(new_db: str):
+    """Queues a database switch to be safely applied at the start of the next run before widgets are instantiated."""
+    st.session_state.pending_db_switch = new_db
+    st.session_state.cached_query_result = None
+
+# Apply any pending database switch BEFORE any widgets are created
+if "pending_db_switch" in st.session_state and st.session_state.pending_db_switch:
+    target_db = st.session_state.pop("pending_db_switch")
+    if target_db in DB_CONNECTIONS:
+        st.session_state.selected_db = target_db
+        st.session_state.sidebar_db_select = target_db
+        st.session_state.main_db_select = target_db
+        st.session_state.insp_db_select = target_db
+        st.session_state.cached_query_result = None
+        presets_for_db = [p for p in PRESETS if p["db"] == target_db]
+        if presets_for_db:
+            st.session_state.user_query = presets_for_db[0]["question"]
+        else:
+            schema_info = get_connection_schema(target_db).get("tables", {})
+            if schema_info:
+                first_tbl = list(schema_info.keys())[0]
+                st.session_state.user_query = f"Show all records from {first_tbl}"
+
+def sync_active_db(new_db: str):
+    """Synchronizes active database selection across all widgets without rerun oscillation."""
+    if new_db in DB_CONNECTIONS:
+        st.session_state.selected_db = new_db
+        try:
+            st.session_state.sidebar_db_select = new_db
+            st.session_state.main_db_select = new_db
+            st.session_state.insp_db_select = new_db
+        except Exception:
+            # If widgets are already instantiated during the run, queue for next frame
+            st.session_state.pending_db_switch = new_db
+        st.session_state.cached_query_result = None
+        presets_for_db = [p for p in PRESETS if p["db"] == new_db]
+        if presets_for_db:
+            st.session_state.user_query = presets_for_db[0]["question"]
+        else:
+            schema_info = get_connection_schema(new_db).get("tables", {})
+            if schema_info:
+                first_tbl = list(schema_info.keys())[0]
+                st.session_state.user_query = f"Show all records from {first_tbl}"
+
+def on_sidebar_db_change():
+    sync_active_db(st.session_state.sidebar_db_select)
+
+def on_main_db_change():
+    sync_active_db(st.session_state.main_db_select)
+
+def on_insp_db_change():
+    sync_active_db(st.session_state.insp_db_select)
 
 # Sidebar: Database Management & Configuration
 with st.sidebar:
@@ -489,12 +542,22 @@ with st.sidebar:
     available_dbs = list(DB_CONNECTIONS.keys())
     if st.session_state.selected_db not in available_dbs:
         st.session_state.selected_db = available_dbs[0]
-    db_index = available_dbs.index(st.session_state.selected_db)
-    sidebar_selected = st.selectbox("Active Database", available_dbs, index=db_index, key="sidebar_db_select")
-    if sidebar_selected != st.session_state.selected_db:
-        st.session_state.selected_db = sidebar_selected
-        st.rerun()
+    if "sidebar_db_select" not in st.session_state or st.session_state.sidebar_db_select not in available_dbs:
+        st.session_state.sidebar_db_select = st.session_state.selected_db
+
+    sidebar_selected = st.selectbox(
+        "Active Database",
+        available_dbs,
+        key="sidebar_db_select",
+        on_change=on_sidebar_db_change
+    )
     selected_db = st.session_state.selected_db
+
+    if selected_db not in BUILTIN_DBS:
+        if st.button(f"Delete Database '{selected_db}'", key="btn_del_active_sidebar", type="secondary"):
+            delete_custom_database(selected_db)
+            queue_active_db_switch("concert_singer")
+            st.rerun()
     
     # Presets for the selected DB (if any)
     filtered_presets = [p for p in PRESETS if p["db"] == selected_db]
@@ -509,13 +572,15 @@ with st.sidebar:
     with st.expander("Add / Insert Tables (SQL or JSON)"):
         target_mode = st.radio(
             "Target Database",
-            [f"Active Database ('{selected_db}')", "Create New Database"],
-            horizontal=True
+            ["Active Database", "Create New Database"],
+            horizontal=True,
+            key="target_db_mode_radio"
         )
-        if target_mode.startswith("Active Database"):
+        if target_mode == "Active Database":
             target_db_name = selected_db
+            st.caption(f"Targeting active database: `{selected_db}`")
         else:
-            target_db_name = st.text_input("New Database Name", placeholder="e.g. university_db").strip()
+            target_db_name = st.text_input("New Database Name", placeholder="e.g. university_db", key="new_db_name_input").strip()
 
         data_format = st.radio("Input Format", ["SQL Script (DDL / DML)", "JSON Format"])
 
@@ -531,7 +596,7 @@ INSERT INTO courses VALUES
     (102, 'Calculus III', 'Mathematics', 4);"""
             custom_sql_input = st.text_area("SQL Schema & Insert Statements", value=default_sql_template, height=180)
 
-            if st.button("Execute & Add Table(s)"):
+            if st.button("Add Table(s)"):
                 if not target_db_name:
                     st.error("Please provide a database name.")
                 else:
@@ -539,7 +604,7 @@ INSERT INTO courses VALUES
                     if success:
                         if msg not in st.session_state.custom_dbs:
                             st.session_state.custom_dbs.append(msg)
-                        st.session_state.selected_db = msg
+                        queue_active_db_switch(msg)
                         st.success(f"Database '{msg}' now has {len(all_tbls)} table(s): {', '.join(all_tbls)}.")
                         st.rerun()
                     else:
@@ -559,7 +624,7 @@ INSERT INTO courses VALUES
 }"""
             custom_json_input = st.text_area("JSON Schema Structure", value=default_json_template, height=200)
 
-            if st.button("Execute & Add Table(s) from JSON"):
+            if st.button("Add Table(s) from JSON"):
                 if not target_db_name:
                     st.error("Please provide a database name.")
                 else:
@@ -569,7 +634,7 @@ INSERT INTO courses VALUES
                         if success:
                             if msg not in st.session_state.custom_dbs:
                                 st.session_state.custom_dbs.append(msg)
-                            st.session_state.selected_db = msg
+                            queue_active_db_switch(msg)
                             st.success(f"Database '{msg}' now has {len(all_tbls)} table(s): {', '.join(all_tbls)}.")
                             st.rerun()
                         else:
@@ -577,26 +642,41 @@ INSERT INTO courses VALUES
                     except json.JSONDecodeError as err:
                         st.error(f"Invalid JSON format: {err}")
 
+    # Option to Delete a Custom Database
+    custom_dbs_avail = [d for d in available_dbs if d not in BUILTIN_DBS]
+    if custom_dbs_avail:
+        with st.expander("Delete a Database"):
+            del_target = st.selectbox("Select database to delete:", custom_dbs_avail, key="sel_custom_db_delete")
+            if st.button(f"Permanently Delete '{del_target}'", type="secondary", key="btn_confirm_delete_db"):
+                delete_custom_database(del_target)
+                if selected_db == del_target:
+                    queue_active_db_switch("concert_singer")
+                st.rerun()
+
     # Inspect current schema
     st.markdown("---")
     st.markdown("### Schema Inspector")
     active_schema = get_connection_schema(selected_db)
-    builtins = {"concert_singer", "pets_1", "car_1", "students", "hotel", "ecommerce", "company"}
     if active_schema and active_schema.get("tables"):
         for tbl, cols in active_schema["tables"].items():
             with st.expander(f"{tbl} ({len(cols)} columns)"):
                 st.code(", ".join(cols), language="sql")
-                if selected_db not in builtins:
+                if selected_db not in BUILTIN_DBS:
                     if st.button(f"Drop Table '{tbl}'", key=f"btn_drop_{selected_db}_{tbl}"):
                         delete_table_from_database(selected_db, tbl)
                         st.rerun()
-        if selected_db not in builtins:
-            if st.button(f"Delete Database '{selected_db}'", type="secondary"):
+        if selected_db not in BUILTIN_DBS:
+            if st.button(f"Delete Active Database '{selected_db}'", key="btn_del_db_inspector", type="secondary"):
                 delete_custom_database(selected_db)
-                st.session_state.selected_db = "concert_singer"
+                queue_active_db_switch("concert_singer")
                 st.rerun()
     else:
         st.info("No tables detected in active connection.")
+        if selected_db not in BUILTIN_DBS:
+            if st.button(f"Delete Empty Database '{selected_db}'", key="btn_del_empty_db", type="secondary"):
+                delete_custom_database(selected_db)
+                queue_active_db_switch("concert_singer")
+                st.rerun()
 
     # Neural Transformer Model Status
     st.markdown("---")
@@ -626,18 +706,21 @@ with main_db_col1:
     available_dbs = list(DB_CONNECTIONS.keys())
     if st.session_state.selected_db not in available_dbs:
         st.session_state.selected_db = available_dbs[0]
-    main_db_idx = available_dbs.index(st.session_state.selected_db)
+    if "main_db_select" not in st.session_state or st.session_state.main_db_select not in available_dbs:
+        st.session_state.main_db_select = st.session_state.selected_db
     main_selected = st.selectbox(
         "Active Database:",
         available_dbs,
-        index=main_db_idx,
         key="main_db_select",
+        on_change=on_main_db_change,
         help="Switch between existing databases to run queries and inspect tables."
     )
-    if main_selected != st.session_state.selected_db:
-        st.session_state.selected_db = main_selected
-        st.rerun()
     selected_db = st.session_state.selected_db
+    if selected_db not in BUILTIN_DBS:
+        if st.button(f"Delete Database '{selected_db}'", key="btn_del_active_main", type="secondary"):
+            delete_custom_database(selected_db)
+            queue_active_db_switch("concert_singer")
+            st.rerun()
 
 with main_db_col2:
     st.markdown(f"**Loaded Tables in `{selected_db}`:**")
@@ -674,7 +757,17 @@ with col_rag_toggle:
     enable_rag = st.checkbox("Enable RAG & Dense Schema Pruning (all-MiniLM-L6-v2)", value=True, help="Retrieves top in-context Spider demonstrations and eliminates distractor tables via dense embeddings & BFS join graphs.")
 
 # Query Resolution & Execution
-if run_button or user_query:
+should_run = False
+if run_button:
+    should_run = True
+elif active_preset and st.session_state.get("last_active_preset") != active_preset["question"]:
+    st.session_state.last_active_preset = active_preset["question"]
+    should_run = True
+elif "has_run_initial_demo" not in st.session_state:
+    st.session_state.has_run_initial_demo = True
+    should_run = True
+
+if should_run:
     active_schema = get_connection_schema(selected_db)
     schema_tables = active_schema.get("tables", {})
     
@@ -908,27 +1001,6 @@ if run_button or user_query:
     else:
         t5_sql = ir_sql
 
-    if enable_rag and rag_info:
-        with st.expander("RAG Context & Dense Retrieval Engine", expanded=True):
-            rcol1, rcol2 = st.columns([1, 1])
-            with rcol1:
-                st.markdown("**Top In-Context Spider Demonstrations**")
-                for ex in rag_info.get("exemplars", []):
-                    st.markdown(f"- **Sim: `{ex['score']}`** ({ex.get('db_id', '')}): *{ex['question']}*")
-                    st.code(ex["sql"], language="sql")
-            with rcol2:
-                st.markdown("**Schema Sub-Graph Pruning**")
-                p_stats = rag_info.get("pruning_stats", {})
-                st.write(f"**Kept Tables:** `{', '.join(p_stats.get('kept_tables', []))}`")
-                if p_stats.get("pruned_tables"):
-                    st.write(f"**Pruned Tables:** `{', '.join(p_stats.get('pruned_tables', []))}`")
-                if p_stats.get("bridging_tables"):
-                    st.write(f"**BFS Bridge Tables:** `{', '.join(p_stats.get('bridging_tables', []))}`")
-                st.caption(f"Embedding Retrieval: sentence-transformers/all-MiniLM-L6-v2 | Latency: <15ms")
-
-    st.markdown("---")
-    st.markdown("### Generated SQL & Query Execution")
-
     headers_t5, rows_t5, err_t5 = execute_sql(selected_db, t5_sql)
     if err_t5 and ("no such column:" in err_t5 or "no such table:" in err_t5):
         from src.transformer_inference import repair_sql_schema_mismatches
@@ -944,25 +1016,60 @@ if run_button or user_query:
                 t5_sql = ir_sql
                 headers_t5, rows_t5, err_t5 = h_ir, r_ir, None
 
+    st.session_state.cached_query_result = {
+        "db": selected_db,
+        "query": user_query,
+        "t5_sql": t5_sql,
+        "headers": headers_t5,
+        "rows": rows_t5,
+        "error": err_t5,
+        "rag_info": rag_info,
+        "enable_rag": enable_rag
+    }
+
+# Render query results if available for the active database
+cached_res = st.session_state.get("cached_query_result")
+if cached_res and cached_res.get("db") == selected_db:
+    rag_info = cached_res.get("rag_info", {})
+    if cached_res.get("enable_rag") and rag_info:
+        with st.expander("RAG Context & Dense Retrieval Engine", expanded=True):
+            rcol1, rcol2 = st.columns([1, 1])
+            with rcol1:
+                st.markdown("**Top In-Context Spider Demonstrations**")
+                for ex in rag_info.get("exemplars", []):
+                    st.markdown(f"- **Sim: `{ex['score']}`** ({ex.get('db_id', '')}): *{ex['question']}*")
+                    st.code(ex["sql"], language="sql")
+            with rcol2:
+                st.markdown("**Schema Sub-Graph Pruning**")
+                p_stats = rag_info.get("pruning_stats", {})
+                st.write(f"**Kept Tables:** `{', '.join(p_stats.get('kept_tables', []))}`")
+                if p_stats.get("pruned_tables"):
+                    st.write(f"**Pruned Tables:** `{', '.join(p_stats.get('pruned_tables', []))}`")
+                if p_stats.get("bridging_tables"):
+                    st.write(f"**BFS Bridge Tables:** `{', '.join(p_stats.get('bridging_tables', []))}`")
+                st.caption("Embedding Retrieval: sentence-transformers/all-MiniLM-L6-v2 | Latency: <15ms")
+
+    st.markdown("---")
+    st.markdown("### Generated SQL & Query Execution")
     st.caption("Synthesized SQL Query:")
-    st.markdown(f'<div class="sql-code-box">{t5_sql}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="sql-code-box">{cached_res["t5_sql"]}</div>', unsafe_allow_html=True)
 
     st.caption("SQLite Execution Output:")
-    if err_t5:
-        st.error(f"SQL Execution Error: {err_t5}")
-    elif rows_t5 is not None and headers_t5 is not None:
-        if not rows_t5:
+    if cached_res.get("error"):
+        st.error(f"SQL Execution Error: {cached_res['error']}")
+    elif cached_res.get("rows") is not None and cached_res.get("headers") is not None:
+        if not cached_res["rows"]:
             st.info("Query executed successfully. 0 rows returned.")
         else:
             table_html = "<div style='overflow-x: auto; margin-top: 0.5rem;'><table class='data-table'><thead><tr>"
-            for h in headers_t5:
+            for h in cached_res["headers"]:
                 table_html += f"<th>{h}</th>"
             table_html += "</tr></thead><tbody>"
-            for r in rows_t5[:25]:
+            for r in cached_res["rows"][:25]:
                 table_html += "<tr>" + "".join(f"<td>{val}</td>" for val in r) + "</tr>"
             table_html += "</tbody></table></div>"
             st.markdown(table_html, unsafe_allow_html=True)
-            st.caption(f"Returned {len(rows_t5)} row(s).")
+            st.caption(f"Returned {len(cached_res['rows'])} row(s).")
 
 # Live Database Table Inspector
 st.markdown("---")
@@ -972,16 +1079,14 @@ with insp_col1:
     st.caption(f"Viewing live tables and data in active database: `{selected_db}`")
 with insp_col2:
     available_dbs = list(DB_CONNECTIONS.keys())
-    insp_db_idx = available_dbs.index(selected_db) if selected_db in available_dbs else 0
-    insp_selected = st.selectbox(
+    if "insp_db_select" not in st.session_state or st.session_state.insp_db_select not in available_dbs:
+        st.session_state.insp_db_select = selected_db
+    st.selectbox(
         "Switch Database to Inspect:",
         available_dbs,
-        index=insp_db_idx,
-        key="insp_db_select"
+        key="insp_db_select",
+        on_change=on_insp_db_change
     )
-    if insp_selected != st.session_state.selected_db:
-        st.session_state.selected_db = insp_selected
-        st.rerun()
 
 lab_conn = DB_CONNECTIONS.get(selected_db)
 if lab_conn:
